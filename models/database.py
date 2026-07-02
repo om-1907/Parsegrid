@@ -116,10 +116,27 @@ class AuditLog(Base):
 
 
 # Database Engine and Session Factory Setup
+import ssl
+
+import certifi
+
+connect_args = {}
+if "supabase.co" in settings.async_database_url or "supabase.com" in settings.async_database_url:
+    # Verify the server certificate against a trusted CA bundle instead of
+    # disabling verification. certifi ships an up-to-date root store.
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    if settings.db_ssl_insecure:
+        # Local-dev escape hatch: keep the channel encrypted but don't verify the
+        # chain. Required for the Supabase pooler's private CA / TLS interception.
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+    connect_args["ssl"] = ssl_context
+
 async_engine = create_async_engine(
     settings.async_database_url,
     echo=settings.debug,
-    future=True
+    future=True,
+    connect_args=connect_args
 )
 
 AsyncSessionLocal = async_sessionmaker(

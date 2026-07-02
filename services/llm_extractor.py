@@ -4,6 +4,7 @@ import logging
 from litellm import acompletion
 from litellm.exceptions import AuthenticationError, Timeout, APIError
 
+from config import settings
 from models.schemas import ExtractedContract
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ async def run_structured_extraction(text: str) -> ExtractedContract:
             model="gemini/gemini-2.5-flash",
             messages=messages,
             response_format=ExtractedContract,
+            api_key=settings.gemini_api_key,
             timeout=30.0  # Failsafe timeout parameter
         )
 

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.database import Document, ExtractedData
 from services.llm_extractor import LLMExtractionError, run_structured_extraction
-from services.pdf_reader import PDFReaderError, extract_pdf_text
+from services.document_reader import DocumentReaderError, extract_document_text
 
 # Configure a module-level logger
 logger = logging.getLogger(__name__)
@@ -58,19 +59,19 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
         logger.error(f"Pipeline aborted for document {doc_id}: Failed to set 'processing' status.")
         return
 
-    # 2. Call the PDF text extraction function from Phase 2
+    # 2. Call the document text extraction function
     try:
-        logger.info(f"Starting PDF extraction for document {doc_id} at {file_path}.")
+        logger.info(f"Starting text extraction for document {doc_id} at {file_path}.")
         # Use asyncio.to_thread to prevent the blocking PDF parsing library from freezing the async event loop
-        extracted_text = await asyncio.to_thread(extract_pdf_text, file_path)
+        extracted_text = await asyncio.to_thread(extract_document_text, file_path)
         logger.info(f"Successfully extracted text from document {doc_id}.")
         
-    except PDFReaderError as e:
-        logger.error(f"PDF extraction explicitly failed for document {doc_id}. Reason: {e}")
+    except DocumentReaderError as e:
+        logger.error(f"Document extraction explicitly failed for document {doc_id}. Reason: {e}")
         await _set_document_status(doc_id, "failed", db_session)
         return
     except Exception as e:
-        logger.error(f"Unexpected catastrophic error during PDF extraction for document {doc_id}. Details: {e}", exc_info=True)
+        logger.error(f"Unexpected catastrophic error during document extraction for document {doc_id}. Details: {e}", exc_info=True)
         await _set_document_status(doc_id, "failed", db_session)
         return
 

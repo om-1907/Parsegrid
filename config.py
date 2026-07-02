@@ -1,6 +1,4 @@
 import os
-from typing import Optional
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -17,21 +15,28 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-    # Database connection parameters
-    db_host: str = Field(default="localhost", alias="DB_HOST")
-    db_port: int = Field(default=5432, alias="DB_PORT")
-    db_user: str = Field(default="postgres", alias="DB_USER")
-    db_password: str = Field(default="postgres", alias="DB_PASSWORD")
-    db_name: str = Field(default="app_db", alias="DB_NAME")
+    # Securely load the required credentials
+    gemini_api_key: str = Field(..., description="API key for Gemini LLM")
+    database_url: str = Field(..., description="Async connection string for PostgreSQL")
+    jwt_secret_key: str = Field(..., description="Secret used to sign JWT access tokens")
 
     # Application settings
     environment: str = Field(default="development", alias="ENVIRONMENT")
     debug: bool = Field(default=False, alias="DEBUG")
 
+    # When True, the DB connection stays TLS-encrypted but skips CA/hostname
+    # verification. Needed for local dev against the Supabase pooler (private CA)
+    # or behind TLS-intercepting antivirus/proxies. Leave False in production.
+    db_ssl_insecure: bool = Field(default=False, alias="DB_SSL_INSECURE")
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.lower() == "production"
+
     @property
     def async_database_url(self) -> str:
-        """Construct the async database URL string (e.g., using asyncpg)."""
-        return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        """Alias for compatibility with models/database.py"""
+        return self.database_url
 
 
 # Instantiate a singleton settings object

@@ -1,15 +1,18 @@
 import asyncio
 import os
 import uuid
+from datetime import datetime
 from typing import AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import get_current_user
 from models.database import AsyncSessionLocal, Document, ExtractedData
+from models.user import User
 from services.pdf_reader import generate_file_hash
 from services.worker import process_document_pipeline
 from services.audit import write_audit_entry
@@ -18,6 +21,9 @@ router = APIRouter(prefix="/api/v1", tags=["Documents"])
 
 STORAGE_DIR = "./storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
+
+# Maximum accepted upload size (25 MB) to protect the server from OOM.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -58,6 +64,8 @@ class ExtractedDataResponse(BaseModel):
     penalty_clause_exists: Optional[bool] = None
     governing_law: Optional[str] = None
     needs_review: bool
+    filename: Optional[str] = None
+    upload_time: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -77,17 +85,34 @@ class ExtractedDataUpdateRequest(BaseModel):
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Uploads a PDF document. Checks for duplicates using SHA256. If valid and novel, saves to storage
     and triggers the extraction pipeline asynchronously.
     """
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    allowed_extensions = {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm"}
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is missing.")
+        
+    _, ext = os.path.splitext(file.filename.lower())
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type. Supported formats are: {', '.join(allowed_extensions)}"
+        )
         
     file_bytes = await file.read()
-    
+
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds the maximum allowed size of {MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+        )
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
     try:
         file_hash = generate_file_hash(file_bytes)
     except Exception as e:
@@ -112,7 +137,7 @@ async def upload_document(
         
     # Novel document flow
     doc_id = uuid.uuid4()
-    unique_filename = f"{doc_id}.pdf"
+    unique_filename = f"{doc_id}{ext}"
     file_path = os.path.join(STORAGE_DIR, unique_filename)
     
     # Save the binary to the storage directory
@@ -140,8 +165,53 @@ async def upload_document(
     )
 
 
+@router.get("/documents/{doc_id}/file")
+async def get_document_file(
+    doc_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns the raw document file.
+    """
+    stmt = select(Document).where(Document.id == doc_id)
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+        
+    _, ext = os.path.splitext(doc.filename.lower())
+    file_path = os.path.join(STORAGE_DIR, f"{doc_id}{ext}")
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File on disk not found.")
+    if ext == ".pdf":
+        return FileResponse(
+            file_path, 
+            media_type="application/pdf",
+            content_disposition_type="inline",
+            filename=doc.filename
+        )
+    else:
+        from fastapi.responses import HTMLResponse
+        from services.document_reader import extract_document_text
+        import html
+        try:
+            text = extract_document_text(file_path)
+            safe_text = html.escape(text)
+            html_content = f"<html><head><style>body {{ font-family: monospace; white-space: pre-wrap; padding: 20px; }}</style></head><body>{safe_text}</body></html>"
+            return HTMLResponse(content=html_content)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Could not generate preview: {e}")
+
+
 @router.get("/status/{doc_id}", response_model=DocumentStatusResponse)
-async def get_document_status(doc_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_document_status(
+    doc_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """
     Retrieves the current execution state of the document pipeline.
     """
@@ -160,13 +230,14 @@ async def query_extracted_data(
     min_value: Optional[float] = None,
     max_payment_days: Optional[int] = None,
     requires_review: Optional[bool] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Constructs a highly optimized async SQLAlchemy query filtering records out of the 
     extracted_data table based on parameters passed by the client.
     """
-    stmt = select(ExtractedData)
+    stmt = select(ExtractedData, Document).join(Document, ExtractedData.document_id == Document.id)
     
     # Dynamically build the filtering clauses
     if min_value is not None:
@@ -180,16 +251,32 @@ async def query_extracted_data(
         
     # Execute the compound query
     result = await db.execute(stmt)
-    records = result.scalars().all()
+    rows = result.all()
     
-    return records
+    response = []
+    for extracted, document in rows:
+        response.append(ExtractedDataResponse(
+            id=extracted.id,
+            document_id=extracted.document_id,
+            party_name=extracted.party_name,
+            contract_value=extracted.contract_value,
+            payment_terms_days=extracted.payment_terms_days,
+            penalty_clause_exists=extracted.penalty_clause_exists,
+            governing_law=extracted.governing_law,
+            needs_review=extracted.needs_review,
+            filename=document.filename,
+            upload_time=document.upload_time
+        ))
+    
+    return response
 
 
 @router.patch("/review/{doc_id}", response_model=ExtractedDataResponse)
 async def resolve_manual_review(
     doc_id: uuid.UUID,
     update_data: ExtractedDataUpdateRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Resolution endpoint for operators to manually fix extracted field values.

@@ -2,9 +2,12 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router
+from api.auth import router as auth_router
 from models.database import Base, async_engine
+import models.user  # Ensure User model is registered
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -48,5 +51,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Allow CORS for Next.js frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Connect the routing layer
 app.include_router(router)
+app.include_router(auth_router, prefix="/api/v1")
