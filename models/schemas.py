@@ -16,6 +16,10 @@ class ExtractedContract(BaseModel):
         default=1.0, 
         description="Confidence score for party_name (0.0 to 1.0)."
     )
+    party_name_source_quote: Optional[str] = Field(
+        default=None,
+        description="The exact verbatim sentence from the contract text that contains the party name."
+    )
     
     contract_value: Optional[float] = Field(
         default=None, 
@@ -24,6 +28,10 @@ class ExtractedContract(BaseModel):
     contract_value_confidence: float = Field(
         default=1.0, 
         description="Confidence score for contract_value (0.0 to 1.0)."
+    )
+    contract_value_source_quote: Optional[str] = Field(
+        default=None,
+        description="The exact verbatim sentence from the contract text that contains the contract value."
     )
     
     payment_terms_days: Optional[int] = Field(
@@ -34,6 +42,10 @@ class ExtractedContract(BaseModel):
         default=1.0, 
         description="Confidence score for payment_terms_days (0.0 to 1.0)."
     )
+    payment_terms_days_source_quote: Optional[str] = Field(
+        default=None,
+        description="The exact verbatim sentence from the contract text that contains the payment terms."
+    )
     
     penalty_clause_exists: Optional[bool] = Field(
         default=None, 
@@ -43,6 +55,10 @@ class ExtractedContract(BaseModel):
         default=1.0, 
         description="Confidence score for penalty_clause_exists (0.0 to 1.0)."
     )
+    penalty_clause_exists_source_quote: Optional[str] = Field(
+        default=None,
+        description="The exact verbatim sentence from the contract text that proves the penalty clause exists or doesn't exist."
+    )
     
     governing_law: Optional[str] = Field(
         default=None, 
@@ -51,6 +67,10 @@ class ExtractedContract(BaseModel):
     governing_law_confidence: float = Field(
         default=1.0, 
         description="Confidence score for governing_law (0.0 to 1.0)."
+    )
+    governing_law_source_quote: Optional[str] = Field(
+        default=None,
+        description="The exact verbatim sentence from the contract text that states the governing law."
     )
     
     needs_review: bool = Field(
@@ -76,3 +96,22 @@ class ExtractedContract(BaseModel):
             self.needs_review = True
             
         return self
+
+
+class GlobalSearchRequest(BaseModel):
+    """Payload for the global search endpoint."""
+    query: str = Field(..., description="The user's natural language search query.")
+
+
+class ChunkResult(BaseModel):
+    """Represents a source chunk retrieved during a RAG search."""
+    document_id: str = Field(..., description="The ID of the document this chunk came from.")
+    chunk_text: str = Field(..., description="The verbatim text of the chunk.")
+    similarity: float = Field(..., description="Cosine similarity score.")
+
+
+class GlobalSearchResponse(BaseModel):
+    """Response containing the synthesized answer and the source chunks used."""
+    answer: str = Field(..., description="The synthesized answer from the LLM.")
+    sources: list[ChunkResult] = Field(default_factory=list, description="The source chunks used to generate the answer.")
+

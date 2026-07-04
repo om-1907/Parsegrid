@@ -23,24 +23,14 @@ export const metadata: Metadata = {
   keywords: "contract intelligence, ai, document extraction, legal ops, parsegrid",
 };
 
-// Runs before hydration so the correct theme class is applied with no flash.
-const themeScript = `
-try {
-  var t = localStorage.getItem('theme');
-  if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  if (t === 'dark') document.documentElement.classList.add('dark');
-} catch (e) {}
-`;
-
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${outfit.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${inter.variable} ${outfit.variable}`}>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-screen bg-background text-foreground antialiased">
         <ThemeProvider>

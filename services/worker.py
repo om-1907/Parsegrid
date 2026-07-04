@@ -109,6 +109,15 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
         # Add to session
         db_session.add(extracted_data_record)
         
+        # RAG Ingestion
+        try:
+            logger.info(f"Ingesting document {doc_id} into RAG database.")
+            from services.rag_engine import ingest_document_to_rag
+            await ingest_document_to_rag(doc_id, document.user_id, extracted_text, db_session)
+        except Exception as e:
+            logger.error(f"Failed to ingest document {doc_id} into RAG: {e}", exc_info=True)
+            raise e
+        
         # We can update the document status in the same transaction
         document.status = "completed"
         

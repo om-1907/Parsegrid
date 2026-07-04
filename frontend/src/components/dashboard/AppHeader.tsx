@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { LogOut, User as UserIcon, LifeBuoy } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ParsegridLogo } from "@/components/ParsegridLogo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,10 +47,7 @@ export function AppHeader() {
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <Link href="/dashboard" className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-400 shadow-md shadow-indigo-500/25">
-            <span className="text-lg font-bold leading-none tracking-tighter text-white">P</span>
-          </div>
-          <span className="text-lg font-bold tracking-tight text-foreground">Parsegrid</span>
+          <ParsegridLogo />
           <span className="ml-1 hidden rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground sm:inline">
             Workspace
           </span>

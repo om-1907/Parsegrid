@@ -176,7 +176,6 @@ export default function HeroCanvas() {
       )}
       {/* Vignette + fade to page so the hero blends into the section below */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_35%,#070914_95%)]" />
-      <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-b from-transparent to-background" />
     </div>
   );
 }

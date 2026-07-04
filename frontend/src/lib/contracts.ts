@@ -13,10 +13,15 @@ export interface ExtractedData {
   id: string;
   document_id: string;
   party_name: string | null;
+  party_name_source_quote?: string | null;
   contract_value: number | null;
+  contract_value_source_quote?: string | null;
   payment_terms_days: number | null;
+  payment_terms_days_source_quote?: string | null;
   penalty_clause_exists: boolean | null;
+  penalty_clause_exists_source_quote?: string | null;
   governing_law: string | null;
+  governing_law_source_quote?: string | null;
   needs_review: boolean;
   filename?: string;
   upload_time?: string;

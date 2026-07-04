@@ -40,6 +40,7 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
   const [search, setSearch] = useState("");
   const [minValue, setMinValue] = useState<number | "">("");
   const [requiresReview, setRequiresReview] = useState<string>("all");
+  const [governingLaw, setGoverningLaw] = useState<string>("all");
 
   // Sorting
   const [sortField, setSortField] = useState<SortField>("upload_time");
@@ -51,6 +52,7 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
       const params = new URLSearchParams();
       if (minValue !== "") params.append("min_value", minValue.toString());
       if (requiresReview !== "all") params.append("requires_review", requiresReview);
+      if (governingLaw !== "all") params.append("governing_law", governingLaw);
 
       const result = await apiFetch<ExtractedData[]>(`/api/v1/query?${params.toString()}`);
       setData(result);
@@ -61,7 +63,7 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
     } finally {
       setLoading(false);
     }
-  }, [minValue, requiresReview]);
+  }, [minValue, requiresReview, governingLaw]);
 
   // Refetch on filter change and whenever the parent bumps refreshTrigger
   // (e.g. after an upload completes or a review is saved).
@@ -156,6 +158,22 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
               placeholder="0"
               className="bg-background"
             />
+          </div>
+          <div className="w-40 space-y-1.5">
+            <Label>Governing Law</Label>
+            <Select value={governingLaw} onValueChange={setGoverningLaw}>
+              <SelectTrigger className="bg-background">
+                <SelectValue placeholder="All" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="California">California</SelectItem>
+                <SelectItem value="New York">New York</SelectItem>
+                <SelectItem value="Delaware">Delaware</SelectItem>
+                <SelectItem value="Texas">Texas</SelectItem>
+                <SelectItem value="UK">UK</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="w-40 space-y-1.5">
             <Label>Status</Label>

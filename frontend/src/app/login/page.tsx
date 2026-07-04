@@ -8,7 +8,7 @@ import { Bot, ArrowRight, ShieldCheck, Mail, KeyRound, Loader2, Gauge } from "lu
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { ParsegridLogo } from "@/components/ParsegridLogo";
 import { apiUrl } from "@/lib/api";
 
 export default function LoginPage() {
@@ -42,7 +42,12 @@ export default function LoginPage() {
           router.push("/dashboard");
         } else {
           const data = await res.json().catch(() => ({}));
-          const msg = data.detail || "Invalid email or password";
+          let msg = data.detail || "Invalid email or password";
+          if (Array.isArray(msg)) {
+            msg = msg.map((err: any) => err.msg || JSON.stringify(err)).join(", ");
+          } else if (typeof msg === "object") {
+            msg = JSON.stringify(msg);
+          }
           setError(msg);
           toast.error(msg);
         }
@@ -59,7 +64,12 @@ export default function LoginPage() {
           toast.success("Account created — please sign in.");
         } else {
           const data = await res.json().catch(() => ({}));
-          const msg = data.detail || "Failed to register";
+          let msg = data.detail || "Failed to register";
+          if (Array.isArray(msg)) {
+            msg = msg.map((err: any) => err.msg || JSON.stringify(err)).join(", ");
+          } else if (typeof msg === "object") {
+            msg = JSON.stringify(msg);
+          }
           setError(msg);
           toast.error(msg);
         }
@@ -77,23 +87,20 @@ export default function LoginPage() {
     <div className="flex min-h-screen bg-background">
       {/* Brand side */}
       <div className="relative hidden flex-1 flex-col justify-between overflow-hidden bg-[#070914] p-12 lg:flex">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,#1e1b4b_0%,#070914_60%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,#111827_0%,#070914_60%)]" />
         <div className="absolute inset-0 bg-grid opacity-[0.12]" />
-        <div className="absolute -left-20 top-1/3 h-96 w-96 rounded-full bg-primary/20 blur-[120px]" />
+        <div className="absolute -left-20 top-1/3 h-96 w-96 rounded-full bg-white/10 blur-[120px]" />
         <div className="absolute bottom-10 right-0 h-80 w-80 rounded-full bg-cyan-500/10 blur-[110px]" />
 
         <div className="relative z-10">
           <Link href="/" className="flex items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-400 shadow-lg shadow-indigo-500/30">
-              <span className="text-2xl font-bold leading-none tracking-tighter text-white">P</span>
-            </div>
-            <span className="text-2xl font-bold tracking-tight text-white">Parsegrid</span>
+            <ParsegridLogo className="h-10 w-10 text-white" textClassName="text-white" />
           </Link>
 
           <div className="mt-28 max-w-lg space-y-6">
             <h1 className="font-display text-4xl font-extrabold leading-tight tracking-tight text-white md:text-5xl">
               Contract intelligence,{" "}
-              <span className="bg-gradient-to-r from-indigo-300 to-cyan-300 bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-slate-200 to-slate-400 bg-clip-text text-transparent">
                 accelerated.
               </span>
             </h1>
@@ -110,7 +117,7 @@ export default function LoginPage() {
             <span className="text-sm font-medium">Enterprise security</span>
           </div>
           <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-indigo-400" />
+            <Bot className="h-5 w-5 text-slate-400" />
             <span className="text-sm font-medium">Agentic AI</span>
           </div>
           <div className="flex items-center gap-2">
@@ -121,23 +128,16 @@ export default function LoginPage() {
       </div>
 
       {/* Form side */}
-      <div className="relative flex flex-1 items-center justify-center p-6 sm:p-12">
-        <div className="absolute right-6 top-6">
-          <ThemeToggle />
-        </div>
-
+      <div className="relative flex flex-1 items-center justify-center bg-white p-6 sm:p-12">
         <div className="w-full max-w-md">
           <div className="mb-8 flex items-center justify-center gap-2.5 lg:hidden">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-400">
-              <span className="text-xl font-bold leading-none tracking-tighter text-white">P</span>
-            </div>
-            <span className="text-xl font-bold tracking-tight text-foreground">Parsegrid</span>
+            <ParsegridLogo className="h-9 w-9" />
           </div>
 
           <div className="rounded-2xl border border-border bg-card p-8 shadow-2xl shadow-black/5">
             <div className="mb-8 text-center">
-              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-                <KeyRound className="h-6 w-6 text-primary" />
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
+                <KeyRound className="h-6 w-6 text-slate-900" />
               </div>
               <h2 className="font-display text-2xl font-bold text-foreground">
                 {isLogin ? "Welcome back" : "Create your account"}
@@ -174,9 +174,12 @@ export default function LoginPage() {
                     Password
                   </Label>
                   {isLogin && (
-                    <span className="cursor-pointer text-sm font-medium text-primary hover:underline">
+                    <Link
+                      href="/forgot-password"
+                      className="text-sm font-medium text-slate-900 hover:underline"
+                    >
                       Forgot password?
-                    </span>
+                    </Link>
                   )}
                 </div>
                 <div className="relative">
@@ -199,7 +202,7 @@ export default function LoginPage() {
                 </div>
               )}
 
-              <Button type="submit" disabled={loading} className="h-11 w-full text-base font-medium">
+              <Button type="submit" disabled={loading} className="h-11 w-full bg-slate-900 text-base font-medium text-white hover:bg-slate-800">
                 {loading ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
                 ) : (
@@ -220,7 +223,7 @@ export default function LoginPage() {
                     setIsLogin(!isLogin);
                     setError("");
                   }}
-                  className="ml-1.5 font-semibold text-primary hover:underline"
+                  className="ml-1.5 font-semibold text-slate-900 hover:underline"
                 >
                   {isLogin ? "Sign up" : "Sign in"}
                 </button>

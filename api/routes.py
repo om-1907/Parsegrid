@@ -10,12 +10,14 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth import get_current_user
+from api.auth import get_current_user, require_role
 from models.database import AsyncSessionLocal, Document, ExtractedData
 from models.user import User
+from models.schemas import GlobalSearchRequest, GlobalSearchResponse
 from services.pdf_reader import generate_file_hash
 from services.worker import process_document_pipeline
 from services.audit import write_audit_entry
+from services.rag_engine import secure_global_search
 
 router = APIRouter(prefix="/api/v1", tags=["Documents"])
 
@@ -118,8 +120,8 @@ async def upload_document(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to generate file hash: {e}")
         
-    # Check if a document with this exact file_hash already exists
-    stmt = select(Document).where(Document.file_hash == file_hash)
+    # Check if a document with this exact file_hash already exists for this user
+    stmt = select(Document).where(Document.file_hash == file_hash, Document.user_id == current_user.id)
     result = await db.execute(stmt)
     existing_doc = result.scalar_one_or_none()
     
@@ -147,6 +149,7 @@ async def upload_document(
     # Insert new record into the documents table
     new_doc = Document(
         id=doc_id,
+        user_id=current_user.id,
         filename=file.filename,
         file_hash=file_hash,
         status="pending"
@@ -174,7 +177,7 @@ async def get_document_file(
     """
     Returns the raw document file.
     """
-    stmt = select(Document).where(Document.id == doc_id)
+    stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
     
@@ -215,7 +218,7 @@ async def get_document_status(
     """
     Retrieves the current execution state of the document pipeline.
     """
-    stmt = select(Document).where(Document.id == doc_id)
+    stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
     
@@ -230,6 +233,7 @@ async def query_extracted_data(
     min_value: Optional[float] = None,
     max_payment_days: Optional[int] = None,
     requires_review: Optional[bool] = None,
+    governing_law: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -237,7 +241,7 @@ async def query_extracted_data(
     Constructs a highly optimized async SQLAlchemy query filtering records out of the 
     extracted_data table based on parameters passed by the client.
     """
-    stmt = select(ExtractedData, Document).join(Document, ExtractedData.document_id == Document.id)
+    stmt = select(ExtractedData, Document).join(Document, ExtractedData.document_id == Document.id).where(Document.user_id == current_user.id)
     
     # Dynamically build the filtering clauses
     if min_value is not None:
@@ -248,6 +252,9 @@ async def query_extracted_data(
         
     if requires_review is not None:
         stmt = stmt.where(ExtractedData.needs_review == requires_review)
+
+    if governing_law is not None:
+        stmt = stmt.where(ExtractedData.governing_law == governing_law)
         
     # Execute the compound query
     result = await db.execute(stmt)
@@ -276,14 +283,14 @@ async def resolve_manual_review(
     doc_id: uuid.UUID,
     update_data: ExtractedDataUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_role(["Manager", "Admin"]))
 ):
     """
     Resolution endpoint for operators to manually fix extracted field values.
     Updates the extracted_data row, flips needs_review to False, and securely
     logs the manual override in the audit log concurrently.
     """
-    stmt = select(ExtractedData).where(ExtractedData.document_id == doc_id)
+    stmt = select(ExtractedData).join(Document, ExtractedData.document_id == Document.id).where(ExtractedData.document_id == doc_id, Document.user_id == current_user.id)
     result = await db.execute(stmt)
     record = result.scalar_one_or_none()
     
@@ -315,7 +322,7 @@ async def resolve_manual_review(
     audit_payload = {
         "old_state": old_state,
         "new_state": updates,
-        "operator_id": update_data.operator_id
+        "operator_id": str(current_user.id)
     }
     
     asyncio.create_task(
@@ -330,3 +337,21 @@ async def resolve_manual_review(
     )
     
     return record
+
+
+@router.post("/global-search", response_model=GlobalSearchResponse)
+async def global_search(
+    request: GlobalSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Performs a secure, tenant-isolated vector search across all documents owned by the user.
+    Answers the query using LLM synthesis with strict prompt injection defenses.
+    """
+    try:
+        response = await secure_global_search(request.query, current_user.id, db)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {e}")
+

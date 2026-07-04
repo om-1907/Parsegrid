@@ -53,7 +53,9 @@ async def run_structured_extraction(text: str) -> ExtractedContract:
             "content": (
                 "You are an expert contract analyst. Extract the requested fields from the "
                 "contract text. You must also output a confidence score between 0.0 and 1.0 "
-                "for each extracted field based on how explicitly it was stated in the text."
+                "for each extracted field based on how explicitly it was stated in the text. "
+                "CRITICAL: For every field, you MUST extract the exact verbatim sentence from "
+                "the contract text into the corresponding `_source_quote` field to serve as a citation."
             )
         },
         {

@@ -8,6 +8,7 @@ from api.routes import router
 from api.auth import router as auth_router
 from models.database import Base, async_engine
 import models.user  # Ensure User model is registered
+import models.password_reset  # Ensure OTP + ResetToken models are registered
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -54,7 +55,7 @@ app = FastAPI(
 # Allow CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

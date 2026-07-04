@@ -4,6 +4,7 @@ import React, { useState, useCallback } from "react";
 import DocumentUploader from "@/components/DocumentUploader";
 import ProcessingQueue from "@/components/ProcessingQueue";
 import ExtractedDataTable from "@/components/ExtractedDataTable";
+import GlobalSearchBar from "@/components/GlobalSearchBar";
 import ReviewDrawer from "@/components/ReviewDrawer";
 import { StatsOverview } from "@/components/dashboard/StatsOverview";
 import { type ExtractedData } from "@/lib/contracts";
@@ -40,6 +41,8 @@ export default function Dashboard() {
         <h1 className="font-display text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
         <p className="text-muted-foreground">AI-powered contract processing and metadata extraction</p>
       </header>
+
+      <GlobalSearchBar />
 
       <StatsOverview data={tableData} loading={tableLoading} />
 

@@ -11,6 +11,7 @@ import { Loader2, AlertCircle, FileText, Calendar } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { apiUrl } from "@/lib/api";
 import { type ExtractedData, type ConfidenceMap, confidenceTier } from "@/lib/contracts";
+import DOMPurify from "dompurify";
 
 interface ReviewDrawerProps {
   isOpen: boolean;
@@ -42,15 +43,27 @@ function FieldLabel({
   htmlFor,
   children,
   confidence,
+  sourceQuote,
 }: {
   htmlFor: string;
   children: React.ReactNode;
   confidence?: number;
+  sourceQuote?: string | null;
 }) {
+  const isLowConfidence = confidence !== undefined && confidenceTier(confidence) === "low";
+  
   return (
-    <div className="flex items-center justify-between">
-      <Label htmlFor={htmlFor}>{children}</Label>
-      <FieldConfidence value={confidence} />
+    <div className="flex flex-col gap-1.5 mb-2">
+      <div className="flex items-center justify-between">
+        <Label htmlFor={htmlFor}>{children}</Label>
+        <FieldConfidence value={confidence} />
+      </div>
+      {isLowConfidence && sourceQuote && (
+        <div className="text-xs text-muted-foreground bg-muted p-2 rounded-md border border-border/50">
+          <span className="font-semibold text-primary/80 block mb-1">Source Quote:</span>
+          <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(sourceQuote) }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -99,13 +112,18 @@ export default function ReviewDrawer({ isOpen, onClose, data, onSaved }: ReviewD
         credentials: "include",
       });
 
-      if (!res.ok) throw new Error("Failed to save changes");
+      if (!res.ok) {
+        if (res.status === 403) {
+            throw new Error("Insufficient Permissions: Only Managers or Admins can approve reviews.");
+        }
+        throw new Error("Failed to save changes");
+      }
 
       toast.success("Review saved and verified.");
       onSaved();
       onClose();
-    } catch {
-      const msg = "An error occurred while saving the review.";
+    } catch (err: any) {
+      const msg = err.message || "An error occurred while saving the review.";
       setError(msg);
       toast.error(msg);
     } finally {
@@ -174,22 +192,22 @@ export default function ReviewDrawer({ isOpen, onClose, data, onSaved }: ReviewD
 
               <form onSubmit={handleSubmit} className="flex-1 space-y-5 pb-4">
                 <div className="space-y-2">
-                  <FieldLabel htmlFor="party_name" confidence={conf("party_name")}>Party name</FieldLabel>
+                  <FieldLabel htmlFor="party_name" confidence={conf("party_name")} sourceQuote={data?.party_name_source_quote}>Party name</FieldLabel>
                   <Input id="party_name" name="party_name" value={formData.party_name as string} onChange={handleChange} disabled={isReadOnly} className="disabled:opacity-80" />
                 </div>
 
                 <div className="space-y-2">
-                  <FieldLabel htmlFor="contract_value" confidence={conf("contract_value")}>Contract value ($)</FieldLabel>
+                  <FieldLabel htmlFor="contract_value" confidence={conf("contract_value")} sourceQuote={data?.contract_value_source_quote}>Contract value ($)</FieldLabel>
                   <Input id="contract_value" type="number" name="contract_value" value={formData.contract_value as number} onChange={handleChange} disabled={isReadOnly} className="disabled:opacity-80" />
                 </div>
 
                 <div className="space-y-2">
-                  <FieldLabel htmlFor="payment_terms_days" confidence={conf("payment_terms_days")}>Payment terms (days)</FieldLabel>
+                  <FieldLabel htmlFor="payment_terms_days" confidence={conf("payment_terms_days")} sourceQuote={data?.payment_terms_days_source_quote}>Payment terms (days)</FieldLabel>
                   <Input id="payment_terms_days" type="number" name="payment_terms_days" value={formData.payment_terms_days as number} onChange={handleChange} disabled={isReadOnly} className="disabled:opacity-80" />
                 </div>
 
                 <div className="space-y-2">
-                  <FieldLabel htmlFor="penalty_clause_exists" confidence={conf("penalty_clause_exists")}>Penalty clause exists</FieldLabel>
+                  <FieldLabel htmlFor="penalty_clause_exists" confidence={conf("penalty_clause_exists")} sourceQuote={data?.penalty_clause_exists_source_quote}>Penalty clause exists</FieldLabel>
                   <Select value={String(formData.penalty_clause_exists)} onValueChange={handleSelectChange} disabled={isReadOnly}>
                     <SelectTrigger id="penalty_clause_exists" className="disabled:opacity-80">
                       <SelectValue placeholder="Select" />
@@ -202,7 +220,7 @@ export default function ReviewDrawer({ isOpen, onClose, data, onSaved }: ReviewD
                 </div>
 
                 <div className="space-y-2">
-                  <FieldLabel htmlFor="governing_law" confidence={conf("governing_law")}>Governing law</FieldLabel>
+                  <FieldLabel htmlFor="governing_law" confidence={conf("governing_law")} sourceQuote={data?.governing_law_source_quote}>Governing law</FieldLabel>
                   <Input id="governing_law" type="text" name="governing_law" value={formData.governing_law as string} onChange={handleChange} disabled={isReadOnly} className="disabled:opacity-80" />
                 </div>
 
