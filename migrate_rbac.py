@@ -15,15 +15,18 @@ async def run_migration():
         print("Adding 'role' column to 'users' table...")
         
         # We need to check if the column exists first, similar to how we handled session_version.
+        # IMPORTANT: scope to table_schema='public'. On Supabase there is also an
+        # auth.users table that already has a 'role' column — without this filter the
+        # check gets a false positive and the migration silently no-ops.
         check_stmt = text("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name='users' AND column_name='role';
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='users' AND column_name='role';
         """)
         
         result = await conn.execute(check_stmt)
         if result.scalar() is None:
-            await conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(50) DEFAULT 'Analyst' NOT NULL"))
+            await conn.execute(text("ALTER TABLE public.users ADD COLUMN role VARCHAR(50) DEFAULT 'Analyst' NOT NULL"))
             print("'role' column added successfully.")
         else:
             print("'role' column already exists.")

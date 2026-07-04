@@ -334,7 +334,9 @@ export default function LandingPage() {
       {/*  Final CTA                                                       */}
       {/* ---------------------------------------------------------------- */}
       <section className="relative z-10 overflow-hidden py-28">
-        <div className="absolute left-1/2 top-1/2 h-[36rem] w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/10 blur-[120px]" />
+        {/* Neutral dark scrim — settles the video's color bleed to a clean dark
+            base under the CTA (previously a white glow that read as a purple halo). */}
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-black/30 to-black/60" />
         <div className="relative z-10 mx-auto max-w-3xl px-4 text-center">
           <h2 className="font-display text-4xl font-bold tracking-tight text-white md:text-5xl">
             Ready to transform your contracting?

@@ -166,7 +166,14 @@ async_engine = create_async_engine(
     settings.async_database_url,
     echo=settings.debug,
     future=True,
-    connect_args=connect_args
+    connect_args=connect_args,
+    # Resilience against the Supabase pooler dropping idle connections.
+    # pool_pre_ping issues a lightweight liveness check and transparently
+    # reconnects a stale connection instead of raising "connection is closed"
+    # on the first request after an idle period. pool_recycle proactively
+    # retires connections older than 5 minutes.
+    pool_pre_ping=True,
+    pool_recycle=300,
 )
 
 AsyncSessionLocal = async_sessionmaker(

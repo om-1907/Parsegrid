@@ -4,12 +4,29 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Bot, ArrowRight, ShieldCheck, Mail, KeyRound, Loader2, Gauge } from "lucide-react";
+import { ArrowRight, ShieldCheck, Mail, KeyRound, Loader2, Gauge, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ParsegridLogo } from "@/components/ParsegridLogo";
+import { FixedVideoBg } from "@/components/landing/FixedVideoBg";
 import { apiUrl } from "@/lib/api";
+
+/** Normalize a FastAPI `detail` (string | validation-array | object) into a message. */
+function normalizeDetail(detail: unknown, fallback: string): string {
+  if (!detail) return fallback;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((err) =>
+        typeof err === "object" && err && "msg" in err
+          ? String((err as { msg: unknown }).msg)
+          : JSON.stringify(err)
+      )
+      .join(", ");
+  }
+  return JSON.stringify(detail);
+}
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -42,12 +59,7 @@ export default function LoginPage() {
           router.push("/dashboard");
         } else {
           const data = await res.json().catch(() => ({}));
-          let msg = data.detail || "Invalid email or password";
-          if (Array.isArray(msg)) {
-            msg = msg.map((err: any) => err.msg || JSON.stringify(err)).join(", ");
-          } else if (typeof msg === "object") {
-            msg = JSON.stringify(msg);
-          }
+          const msg = normalizeDetail(data?.detail, "Invalid email or password");
           setError(msg);
           toast.error(msg);
         }
@@ -64,12 +76,7 @@ export default function LoginPage() {
           toast.success("Account created — please sign in.");
         } else {
           const data = await res.json().catch(() => ({}));
-          let msg = data.detail || "Failed to register";
-          if (Array.isArray(msg)) {
-            msg = msg.map((err: any) => err.msg || JSON.stringify(err)).join(", ");
-          } else if (typeof msg === "object") {
-            msg = JSON.stringify(msg);
-          }
+          const msg = normalizeDetail(data?.detail, "Failed to register");
           setError(msg);
           toast.error(msg);
         }
@@ -84,159 +91,142 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen bg-background">
-      {/* Brand side */}
-      <div className="relative hidden flex-1 flex-col justify-between overflow-hidden bg-[#070914] p-12 lg:flex">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,#111827_0%,#070914_60%)]" />
-        <div className="absolute inset-0 bg-grid opacity-[0.12]" />
-        <div className="absolute -left-20 top-1/3 h-96 w-96 rounded-full bg-white/10 blur-[120px]" />
-        <div className="absolute bottom-10 right-0 h-80 w-80 rounded-full bg-cyan-500/10 blur-[110px]" />
+    <div className="relative flex min-h-screen flex-col items-center justify-center px-4 py-10 text-white">
+      {/* Full-page fixed video background (same as the landing page). */}
+      <FixedVideoBg />
 
-        <div className="relative z-10">
-          <Link href="/" className="flex items-center gap-2.5">
-            <ParsegridLogo className="h-10 w-10 text-white" textClassName="text-white" />
-          </Link>
+      {/* Brand logo, top-left, links home. */}
+      <Link
+        href="/"
+        className="absolute left-6 top-6 z-10 flex items-center gap-2.5 sm:left-8 sm:top-8"
+      >
+        <ParsegridLogo className="h-9 w-9 text-white" textClassName="text-white" />
+      </Link>
 
-          <div className="mt-28 max-w-lg space-y-6">
-            <h1 className="font-display text-4xl font-extrabold leading-tight tracking-tight text-white md:text-5xl">
-              Contract intelligence,{" "}
-              <span className="bg-gradient-to-r from-slate-200 to-slate-400 bg-clip-text text-transparent">
-                accelerated.
-              </span>
-            </h1>
-            <p className="text-lg leading-relaxed text-white/60">
-              Sign in to manage your extraction workflows. Automate review, minimize risk, and get
-              actionable insights from every agreement.
+      {/* ---- Frosted glass sign-in card ---- */}
+      <div className="relative z-10 w-full max-w-md">
+        <div className="rounded-3xl border border-white/15 bg-white/[0.07] p-8 shadow-2xl shadow-black/50 backdrop-blur-2xl sm:p-10">
+          <div className="mb-8 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-white/10 backdrop-blur">
+              <KeyRound className="h-6 w-6 text-white" />
+            </div>
+            <h2 className="font-display text-2xl font-bold text-white md:text-3xl">
+              {isLogin ? "Welcome back" : "Create your account"}
+            </h2>
+            <p className="mt-1.5 text-sm text-white/70">
+              {isLogin
+                ? "Enter your credentials to access your workspace"
+                : "Sign up to start automating your contracts"}
             </p>
           </div>
-        </div>
 
-        <div className="relative z-10 flex flex-wrap items-center gap-6 text-white/50">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-emerald-400" />
-            <span className="text-sm font-medium">Enterprise security</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-slate-400" />
-            <span className="text-sm font-medium">Agentic AI</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Gauge className="h-5 w-5 text-cyan-400" />
-            <span className="text-sm font-medium">Confidence scoring</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Form side */}
-      <div className="relative flex flex-1 items-center justify-center bg-white p-6 sm:p-12">
-        <div className="w-full max-w-md">
-          <div className="mb-8 flex items-center justify-center gap-2.5 lg:hidden">
-            <ParsegridLogo className="h-9 w-9" />
-          </div>
-
-          <div className="rounded-2xl border border-border bg-card p-8 shadow-2xl shadow-black/5">
-            <div className="mb-8 text-center">
-              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-                <KeyRound className="h-6 w-6 text-slate-900" />
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="email" className="font-medium text-white/90">
+                Email address
+              </Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-3 h-5 w-5 text-white/50" />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="name@company.com"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="h-11 border-white/15 bg-white/10 pl-10 text-white placeholder:text-white/40 backdrop-blur focus-visible:border-white/40 focus-visible:ring-white/30"
+                />
               </div>
-              <h2 className="font-display text-2xl font-bold text-foreground">
-                {isLogin ? "Welcome back" : "Create your account"}
-              </h2>
-              <p className="mt-1.5 text-muted-foreground">
-                {isLogin
-                  ? "Enter your credentials to access your workspace"
-                  : "Sign up to start automating your contracts"}
-              </p>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div className="space-y-2">
-                <Label htmlFor="email" className="font-medium text-foreground">
-                  Email address
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password" className="font-medium text-white/90">
+                  Password
                 </Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="name@company.com"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="h-11 pl-10"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password" className="font-medium text-foreground">
-                    Password
-                  </Label>
-                  {isLogin && (
-                    <Link
-                      href="/forgot-password"
-                      className="text-sm font-medium text-slate-900 hover:underline"
-                    >
-                      Forgot password?
-                    </Link>
-                  )}
-                </div>
-                <div className="relative">
-                  <KeyRound className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="••••••••"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="h-11 pl-10"
-                  />
-                </div>
-              </div>
-
-              {error && (
-                <div className="rounded-lg bg-destructive/10 p-3 text-sm font-medium text-destructive">
-                  {error}
-                </div>
-              )}
-
-              <Button type="submit" disabled={loading} className="h-11 w-full bg-slate-900 text-base font-medium text-white hover:bg-slate-800">
-                {loading ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <>
-                    {isLogin ? "Sign in" : "Create account"}
-                    <ArrowRight className="ml-2 h-5 w-5" />
-                  </>
+                {isLogin && (
+                  <Link
+                    href="/forgot-password"
+                    className="text-sm font-medium text-white/80 hover:text-white hover:underline"
+                  >
+                    Forgot password?
+                  </Link>
                 )}
-              </Button>
-            </form>
-
-            <div className="mt-6 border-t border-border pt-6 text-center">
-              <p className="text-sm text-muted-foreground">
-                {isLogin ? "Don't have an account?" : "Already have an account?"}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsLogin(!isLogin);
-                    setError("");
-                  }}
-                  className="ml-1.5 font-semibold text-slate-900 hover:underline"
-                >
-                  {isLogin ? "Sign up" : "Sign in"}
-                </button>
-              </p>
+              </div>
+              <div className="relative">
+                <KeyRound className="absolute left-3 top-3 h-5 w-5 text-white/50" />
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="••••••••"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="h-11 border-white/15 bg-white/10 pl-10 text-white placeholder:text-white/40 backdrop-blur focus-visible:border-white/40 focus-visible:ring-white/30"
+                />
+              </div>
             </div>
+
+            {error && (
+              <div className="rounded-lg border border-red-400/30 bg-red-500/15 p-3 text-sm font-medium text-red-200 backdrop-blur">
+                {error}
+              </div>
+            )}
+
+            <Button
+              type="submit"
+              disabled={loading}
+              className="h-11 w-full bg-white text-base font-semibold text-slate-900 shadow-xl shadow-black/30 hover:bg-white/90"
+            >
+              {loading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <>
+                  {isLogin ? "Sign in" : "Create account"}
+                  <ArrowRight className="ml-2 h-5 w-5" />
+                </>
+              )}
+            </Button>
+          </form>
+
+          <div className="mt-6 border-t border-white/10 pt-6 text-center">
+            <p className="text-sm text-white/70">
+              {isLogin ? "Don't have an account?" : "Already have an account?"}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLogin(!isLogin);
+                  setError("");
+                }}
+                className="ml-1.5 font-semibold text-white hover:underline"
+              >
+                {isLogin ? "Sign up" : "Sign in"}
+              </button>
+            </p>
           </div>
 
-          <p className="mt-6 text-center text-sm text-muted-foreground">
-            <Link href="/" className="hover:text-foreground">
-              ← Back to home
-            </Link>
-          </p>
+          {/* Trust strip */}
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-white/60">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="h-4 w-4 text-emerald-400" />
+              <span className="text-xs font-medium">Enterprise security</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Bot className="h-4 w-4 text-cyan-300" />
+              <span className="text-xs font-medium">Agentic AI</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Gauge className="h-4 w-4 text-amber-300" />
+              <span className="text-xs font-medium">Confidence scoring</span>
+            </div>
+          </div>
         </div>
+
+        <p className="mt-6 text-center text-sm text-white/70">
+          <Link href="/" className="transition-colors hover:text-white">
+            ← Back to home
+          </Link>
+        </p>
       </div>
     </div>
   );

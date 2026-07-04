@@ -32,8 +32,9 @@ def simple_chunk_text(text: str, chunk_size: int = 2000, overlap: int = 200) -> 
 async def generate_embedding(text: str) -> List[float]:
     """Generates a vector embedding for the given text using LiteLLM."""
     response = await litellm.aembedding(
-        model="gemini/text-embedding-004",
-        input=text
+        model=settings.embedding_model,
+        input=text,
+        api_key=settings.gemini_api_key,
     )
     return response.data[0].embedding
 
@@ -110,11 +111,12 @@ async def secure_global_search(query: str, user_id: uuid.UUID, db_session: Async
     
     # Call LLM
     response = await litellm.acompletion(
-        model=settings.llm_model, 
+        model=settings.llm_model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
-        ]
+        ],
+        api_key=settings.gemini_api_key,
     )
     
     answer = response.choices[0].message.content

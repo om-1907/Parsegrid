@@ -75,13 +75,14 @@ Project1/
 | POST   | `/auth/logout`                    | logout |
 | GET    | `/auth/me`                        | current user |
 | POST   | `/upload`                         | upload doc → `202`, dedup by hash, queues background extraction |
+| POST   | `/global-search`                  | RAG semantic search using pgvector and strict tenant isolation |
 | GET    | `/status/{doc_id}`                | poll processing status |
 | GET    | `/documents/{doc_id}/file`        | preview/download original (PDF inline; others → HTML preview) |
-| GET    | `/query`                          | filter extracted data (`min_value`, `max_payment_days`, `requires_review`) |
-| PATCH  | `/review/{doc_id}`                | operator correction; flips `needs_review=false`; writes audit entry |
+| GET    | `/query`                          | filter extracted data (`min_value`, `max_payment_days`, `requires_review`, `governing_law`) |
+| PATCH  | `/review/{doc_id}`                | operator correction (RBAC protected: Manager/Admin only); flips `needs_review=false`; writes audit entry |
 
 - Allowed upload types: `.pdf .docx .txt .md .csv .html .htm`. Max size **25 MB**.
-- CORS is hard-coded to `http://localhost:3000` in `main.py` — **update before deploy.**
+- CORS is hard-coded to `http://localhost:3000` in `main.py`. Uvicorn must be started with `--host 0.0.0.0` to avoid Node.js IPv6 `::1` fetch issues.
 
 ---
 
@@ -109,39 +110,45 @@ before writing Next.js code**, and heed deprecation notices.
 
 ---
 
-## 6. ⭐ Current in-progress work — logo swap (UNCOMMITTED)
+## 6. ⭐ Current in-progress work — RAG, RBAC, and CORS fixes
 
-The user provided a new logo and asked to **"put it instead of just P"** — i.e. replace the
-old placeholder logo (a gradient square with the letter **"P"** + the word "Parsegrid")
-with the new SVG logo everywhere it appeared.
+> **2026-07-04 fix pass (post-Antigravity):** the "Network error / Is the backend
+> running?" on sign-in was **two real backend bugs**, now fixed:
+> 1. **`users.role` column never existed.** Antigravity added `role` to the `User`
+>    model + wrote `migrate_rbac.py`, but the migration was never run — *and* its
+>    existence check wasn't scoped to `table_schema='public'`, so on Supabase it
+>    matched `auth.users.role` and silently no-opped forever. Fixed the check +
+>    `ALTER TABLE public.users`, ran it. Login/register/`/me`/RBAC all verified.
+> 2. **`rag_engine.py` referenced `settings.llm_model`**, which didn't exist in
+>    `config.py` → global-search would `AttributeError` on every query. Added
+>    `llm_model` + `embedding_model` settings and pass `api_key` explicitly.
+> 3. **DB engine had no `pool_pre_ping`** → first request after the Supabase pooler
+>    dropped an idle connection 500'd with "connection is closed". Added
+>    `pool_pre_ping=True` + `pool_recycle=300` in `models/database.py`.
+>
+> **Migrations that must be run once on a fresh DB** (order-independent, all idempotent):
+> `python migrate_session_version.py && python migrate_rbac.py && python migrate_rag.py`
+>
+> Also redesigned the **`/login` and `/forgot-password`** pages to a full-page
+> video background (reusing `FixedVideoBg`) with a frosted-glass card, and removed
+> the purple glow under the landing final-CTA.
 
-**Done (working tree, not yet committed):** `VerifAILogo.tsx` was created and swapped in at:
-- `src/app/page.tsx` (footer)
-- `src/app/login/page.tsx` (2 spots: side panel + mobile)
-- `src/components/dashboard/AppHeader.tsx`
-- `src/components/landing/LandingNav.tsx`
-- `src/components/landing/HeroCanvas.tsx` — minor unrelated tweak (removed a bottom
-  gradient fade div).
+We have recently completed a major security and functionality overhaul:
 
-Uncommitted files: 5 modified + 1 new (`VerifAILogo.tsx`). Run `git diff` to review.
+1. **RAG Engine & Global Search**:
+   - Upgraded `ExtractedContract` to include `_source_quote` fields to capture verbatim text chunks.
+   - Added `pgvector` to PostgreSQL and created a `document_chunks` table for tenant-isolated embeddings.
+   - Built the `POST /api/v1/global-search` endpoint for secure vector search.
+   - Built the frontend `GlobalSearchBar` which sanitizes all LLM outputs using `DOMPurify` to prevent XSS.
 
-### 🔴 OPEN ISSUE — brand-name mismatch (needs a decision)
-The new component is named **`VerifAILogo`** and its wordmark renders **"VerifAI Ledger"**,
-but the product is **Parsegrid** everywhere else (README, landing copy, `.env` comments).
-The swap therefore **replaced the "Parsegrid" text with "VerifAI Ledger" text.**
+2. **RBAC (Role-Based Access Control)**:
+   - Added a `role` column to the `User` model.
+   - Protected the `PATCH /api/v1/review/{doc_id}` endpoint so only `Manager` and `Admin` roles can access it.
+   - Updated the frontend `ReviewDrawer` to gracefully catch `403 Forbidden` errors.
 
-Decide one of:
-1. **Keep the name Parsegrid** → change the wordmark in `VerifAILogo.tsx` (line ~26) from
-   `Verif<span>AI</span> Ledger` to `Parsegrid`, and consider renaming the file/component
-   to `ParsegridLogo` for clarity.
-2. **Rebrand to VerifAI Ledger** → update README, landing/marketing copy, `.env` comments,
-   page `<title>`/metadata, and `frontend/.env.example` accordingly.
-
-Until this is resolved the UI shows one name and the docs/copy show another.
-
-The logo SVG itself is a shield (indigo `#6366F1` stroke) with an amber (`#F59E0B`)
-chevron + dot. `className` sizes the icon; `textClassName` colors the wordmark (used to
-make it white over dark hero/nav backgrounds).
+3. **IPv6 / Next.js Fetch Fix**:
+   - Resolved a persistent "Is the backend running?" network error caused by Next.js resolving `localhost` to IPv6 (`::1`), while Uvicorn defaulted to IPv4 (`127.0.0.1`).
+   - Fixed by keeping `NEXT_PUBLIC_API_URL` as `http://localhost:8000` and explicitly starting Uvicorn with `--host 0.0.0.0` so it listens on both protocols and satisfies CORS.
 
 ---
 
@@ -190,6 +197,11 @@ pooler / TLS-intercepting AV; leave `false` in prod).
 
 ## 10. Immediate next action for a fresh chat
 
-1. Resolve the **Parsegrid vs. VerifAI Ledger** naming decision (§6).
-2. Review + commit the uncommitted logo swap once the wordmark is correct.
-3. Verify the logo renders well in both light/dark mode and over the dark hero/nav.
+1. Start the Uvicorn backend with `--host 0.0.0.0` (avoids the IPv6/`::1` issue).
+2. On any **fresh database**, run the three idempotent migrations before first login
+   (see §6): `migrate_session_version.py`, `migrate_rbac.py`, `migrate_rag.py`.
+   Skipping `migrate_rbac.py` reproduces the `users.role does not exist` login 500.
+3. Test RAG vector search end-to-end via `GlobalSearchBar` (needs at least one
+   uploaded+processed document so `document_chunks` is populated).
+4. Commit the 2026-07-04 fix pass (RBAC migration fix, RAG config, DB pool_pre_ping,
+   login/forgot-password redesign, landing purple removal).

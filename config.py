@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     database_url: str = Field(..., description="Async connection string for PostgreSQL")
     jwt_secret_key: str = Field(..., description="Secret used to sign JWT access tokens")
 
+    # LiteLLM model identifiers. Kept configurable so extraction / RAG synthesis
+    # can be pointed at a different model without code changes.
+    llm_model: str = Field(default="gemini/gemini-2.5-flash", description="Chat model for extraction & RAG synthesis")
+    embedding_model: str = Field(default="gemini/text-embedding-004", description="Embedding model for RAG vector search")
+
     # Application settings
     environment: str = Field(default="development", alias="ENVIRONMENT")
     debug: bool = Field(default=False, alias="DEBUG")
