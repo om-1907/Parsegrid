@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
+import enum
 
 from sqlalchemy import (
     Boolean,
@@ -13,7 +14,9 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
-    func
+    func,
+    Enum,
+    JSON
 )
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
@@ -31,6 +34,11 @@ from sqlalchemy.orm import (
 from config import settings
 
 
+class DocumentType(enum.Enum):
+    contract = "contract"
+    resume = "resume"
+
+
 class Base(AsyncAttrs, DeclarativeBase):
     """Base class for SQLAlchemy 2.0 declarative models with async support."""
     pass
@@ -43,6 +51,11 @@ class Document(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    
+    document_type: Mapped[DocumentType] = mapped_column(Enum(DocumentType), nullable=False, default=DocumentType.contract)
+    original_language: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    parent_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    
     upload_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=func.now(),
@@ -56,9 +69,16 @@ class Document(Base):
         cascade="all, delete-orphan",
         uselist=False
     )
+    extracted_resume: Mapped[Optional["ExtractedResume"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        uselist=False
+    )
 
     __table_args__ = (
         Index("ix_documents_file_hash", "file_hash"),
+        Index("ix_documents_user_id", "user_id"),
+        Index("ix_documents_status", "status"),
     )
 
 
@@ -95,8 +115,49 @@ class ExtractedData(Base):
     document: Mapped["Document"] = relationship(back_populates="extracted_data")
 
     __table_args__ = (
+        Index("ix_extracted_data_document_id", "document_id"),
         Index("ix_extracted_data_payment_terms_days", "payment_terms_days"),
         Index("ix_extracted_data_needs_review", "needs_review"),
+        Index("ix_extracted_data_governing_law", "governing_law"),
+        Index("ix_extracted_data_contract_value", "contract_value"),
+    )
+
+
+class ExtractedResume(Base):
+    __tablename__ = "extracted_resumes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    candidate_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    years_of_experience: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    education_level: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    skills: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    previous_companies: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=func.now(),
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=func.now(),
+        onupdate=func.now(),
+        nullable=False
+    )
+
+    # Relationships
+    document: Mapped["Document"] = relationship(back_populates="extracted_resume")
+
+    __table_args__ = (
+        Index("ix_extracted_resumes_document_id", "document_id"),
+        Index("ix_extracted_resumes_needs_review", "needs_review"),
     )
 
 
@@ -115,6 +176,11 @@ class AuditLog(Base):
         nullable=False
     )
 
+    __table_args__ = (
+        Index("ix_audit_log_doc_id", "doc_id"),
+        Index("ix_audit_log_event_type", "event_type"),
+    )
+
 
 from pgvector.sqlalchemy import Vector
 
@@ -131,7 +197,9 @@ class DocumentChunk(Base):
         nullable=False
     )
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Any] = mapped_column(Vector(768), nullable=False)
+    # Must match settings.embedding_dimensions and the live vector() column size.
+    # Kept at 768 so the HNSW cosine index stays valid (pgvector HNSW caps at 2000 dims).
+    embedding: Mapped[Any] = mapped_column(Vector(settings.embedding_dimensions), nullable=False)
 
     __table_args__ = (
         Index(
@@ -142,6 +210,7 @@ class DocumentChunk(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
         Index("ix_document_chunks_user_id", "user_id"),
+        Index("ix_document_chunks_document_id", "document_id"),
     )
 
 
@@ -167,14 +236,24 @@ async_engine = create_async_engine(
     echo=settings.debug,
     future=True,
     connect_args=connect_args,
-    # Resilience against the Supabase pooler dropping idle connections.
-    # pool_pre_ping issues a lightweight liveness check and transparently
-    # reconnects a stale connection instead of raising "connection is closed"
-    # on the first request after an idle period. pool_recycle proactively
-    # retires connections older than 5 minutes.
+    # ── Production Connection Pool Configuration ──────────────────────────
+    # pool_size: Baseline persistent connections held open to Supabase.
+    # max_overflow: Extra connections allowed during traffic spikes (total = pool_size + max_overflow = 30).
+    # pool_timeout: Seconds to wait for a free connection before raising an error.
+    # pool_pre_ping: Liveness check; transparently reconnects stale connections.
+    # pool_recycle: Proactively retire connections older than 5 min (Supavisor compat).
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
     pool_pre_ping=True,
     pool_recycle=300,
 )
+
+# NOTE: Do NOT register the asyncpg-level pgvector codec (pgvector.asyncpg.register_vector)
+# here. The `pgvector.sqlalchemy.Vector` column type already handles encoding/decoding via
+# SQLAlchemy's bind/result processors. Registering both makes SQLAlchemy stringify the
+# embedding list AND the asyncpg codec re-encode that string, raising
+# "invalid input for query argument ... '[0.01, ...]'" on every insert/search.
 
 AsyncSessionLocal = async_sessionmaker(
     bind=async_engine,

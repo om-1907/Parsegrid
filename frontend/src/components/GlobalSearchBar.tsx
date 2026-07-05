@@ -56,7 +56,7 @@ export default function GlobalSearchBar() {
         <Search className="absolute left-4 w-5 h-5 text-muted-foreground" />
         <input
           type="text"
-          className="w-full pl-12 pr-4 py-3 bg-card border border-border rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-all shadow-sm"
+          className="w-full pl-12 pr-4 py-3 bg-white/[0.06] border border-white/10 backdrop-blur-xl rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-all shadow-xl shadow-black/20"
           placeholder="Ask a question about your documents (e.g. 'What is the standard payment term?')"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -77,7 +77,7 @@ export default function GlobalSearchBar() {
       )}
 
       {result && (
-        <div className="mt-6 p-6 bg-card border border-border rounded-xl shadow-sm space-y-4 animate-in fade-in slide-in-from-top-4">
+        <div className="mt-6 p-6 bg-white/[0.06] border border-white/10 backdrop-blur-xl rounded-xl shadow-xl shadow-black/20 space-y-4 animate-in fade-in slide-in-from-top-4">
           <h3 className="font-semibold text-lg flex items-center gap-2">
             ✨ AI Analysis
           </h3>
@@ -91,7 +91,7 @@ export default function GlobalSearchBar() {
               <h4 className="text-sm font-medium text-foreground mb-3">Sources (Top {result.sources.length})</h4>
               <div className="grid gap-3">
                 {result.sources.map((src, idx) => (
-                  <div key={idx} className="p-3 bg-muted/30 rounded-lg text-sm text-muted-foreground border border-border/50">
+                  <div key={idx} className="p-3 bg-white/5 rounded-lg text-sm text-muted-foreground border border-white/10">
                     <p className="mb-1 text-xs text-primary/80 font-medium font-mono">DOC ID: {src.document_id}</p>
                     {/* Sanitize chunk text too, as it comes from potentially untrusted PDFs */}
                     <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(src.chunk_text) }} />

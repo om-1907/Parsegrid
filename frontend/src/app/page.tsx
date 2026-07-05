@@ -360,14 +360,9 @@ export default function LandingPage() {
       {/* ---------------------------------------------------------------- */}
       <footer className="relative z-10 border-t border-white/10 bg-[#121212]/90 py-6 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-5 px-4 sm:flex-row">
-          {/* Left — Brand */}
-          <div className="flex items-center gap-2.5">
-            <ParsegridLogo textClassName="text-white" />
-          </div>
-
           {/* Center — Copyright */}
           <p className="text-center font-sans text-xs tracking-wide text-gray-500">
-            © {new Date().getFullYear()} Parsegrid — AI Contract Intelligence.
+            © {new Date().getFullYear()} Parsegrid.
             <span className="mx-1">Engineered by</span>
             <span className="font-medium text-gray-400">Om Sutariya</span>.
           </p>
@@ -407,15 +402,6 @@ export default function LandingPage() {
               className="rounded-lg p-2 text-gray-400 transition-all duration-200 hover:scale-110 hover:bg-white/5 hover:text-white"
             >
               <Mail className="h-5 w-5" />
-            </a>
-
-            {/* Phone */}
-            <a
-              href="tel:+919825318768"
-              aria-label="Phone"
-              className="rounded-lg p-2 text-gray-400 transition-all duration-200 hover:scale-110 hover:bg-white/5 hover:text-white"
-            >
-              <Phone className="h-5 w-5" />
             </a>
           </div>
         </div>

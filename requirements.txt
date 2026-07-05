@@ -12,3 +12,5 @@ passlib[bcrypt]>=1.7.4
 PyJWT>=2.13.0
 bcrypt>=4.1.0
 certifi>=2024.2.2
+slowapi>=0.1.9
+pgvector>=0.3.0

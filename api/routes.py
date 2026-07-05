@@ -1,23 +1,26 @@
 import asyncio
 import os
 import uuid
+import zipfile
+import io
 from datetime import datetime
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List, Optional, Union
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_user, require_role
-from models.database import AsyncSessionLocal, Document, ExtractedData
+from models.database import AsyncSessionLocal, Document, DocumentType, ExtractedData
 from models.user import User
 from models.schemas import GlobalSearchRequest, GlobalSearchResponse
 from services.pdf_reader import generate_file_hash
 from services.worker import process_document_pipeline
 from services.audit import write_audit_entry
 from services.rag_engine import secure_global_search
+from middleware.rate_limiter import limiter
 
 router = APIRouter(prefix="/api/v1", tags=["Documents"])
 
@@ -53,6 +56,10 @@ class DocumentResponse(BaseModel):
     status: str
     message: Optional[str] = None
 
+class BatchDocumentResponse(BaseModel):
+    ids: List[uuid.UUID]
+    message: str
+
 class DocumentStatusResponse(BaseModel):
     id: uuid.UUID
     status: str
@@ -73,28 +80,67 @@ class ExtractedDataResponse(BaseModel):
 
 
 class ExtractedDataUpdateRequest(BaseModel):
-    party_name: Optional[str] = None
-    contract_value: Optional[float] = None
-    payment_terms_days: Optional[int] = None
+    party_name: Optional[str] = Field(default=None, max_length=500)
+    contract_value: Optional[float] = Field(default=None, ge=0.0, le=1e15)
+    payment_terms_days: Optional[int] = Field(default=None, ge=0, le=3650)
     penalty_clause_exists: Optional[bool] = None
-    governing_law: Optional[str] = None
-    operator_id: str = "system_operator"
+    governing_law: Optional[str] = Field(default=None, max_length=200)
+
+
+class ExtractedResumeResponse(BaseModel):
+    id: uuid.UUID
+    document_id: uuid.UUID
+    candidate_name: Optional[str] = None
+    years_of_experience: Optional[float] = None
+    education_level: Optional[str] = None
+    skills: List[str] = Field(default_factory=list)
+    previous_companies: List[str] = Field(default_factory=list)
+    needs_review: bool
+    filename: Optional[str] = None
+    upload_time: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ExtractedResumeUpdateRequest(BaseModel):
+    candidate_name: Optional[str] = Field(default=None, max_length=500)
+    years_of_experience: Optional[float] = Field(default=None, ge=0.0)
+    education_level: Optional[str] = Field(default=None, max_length=200)
+    skills: Optional[List[str]] = None
+    previous_companies: Optional[List[str]] = None
+
+
+
+
+# ── In-Memory TTL Cache for /status endpoint ─────────────────────────────
+import time as _time
+_status_cache: dict[str, tuple[float, dict]] = {}  # key → (expiry_ts, payload)
+_STATUS_CACHE_TTL = 3  # seconds
 
 
 # --- Endpoints ---
 
-@router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/upload", response_model=Union[DocumentResponse, BatchDocumentResponse], status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("10/minute")
 async def upload_document(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    document_type: str = Form(default="contract"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Uploads a PDF document. Checks for duplicates using SHA256. If valid and novel, saves to storage
+    Uploads a PDF document or a ZIP archive containing multiple documents.
+    Checks for duplicates using SHA256. If valid and novel, saves to storage
     and triggers the extraction pipeline asynchronously.
     """
-    allowed_extensions = {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm"}
+    try:
+        doc_type_enum = DocumentType(document_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid document_type. Must be 'contract' or 'resume'.")
+
+    allowed_extensions = {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm", ".zip"}
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is missing.")
         
@@ -114,6 +160,56 @@ async def upload_document(
         )
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    if ext == ".zip":
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+                queued_ids = []
+                for zip_info in z.infolist():
+                    if zip_info.is_dir(): continue
+                    # Skip hidden files
+                    if zip_info.filename.startswith("__MACOSX/") or zip_info.filename.split("/")[-1].startswith("."):
+                        continue
+                    _, z_ext = os.path.splitext(zip_info.filename.lower())
+                    if z_ext not in {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm"}:
+                        continue
+                        
+                    z_file_bytes = z.read(zip_info.filename)
+                    if not z_file_bytes: continue
+                    
+                    z_file_hash = generate_file_hash(z_file_bytes)
+                    
+                    # Check if exists
+                    stmt = select(Document).where(Document.file_hash == z_file_hash, Document.user_id == current_user.id)
+                    result = await db.execute(stmt)
+                    if result.scalar_one_or_none():
+                        continue # Skip existing documents in batch
+                        
+                    z_doc_id = uuid.uuid4()
+                    z_unique_filename = f"{z_doc_id}{z_ext}"
+                    z_file_path = os.path.join(STORAGE_DIR, z_unique_filename)
+                    
+                    with open(z_file_path, "wb") as f:
+                        f.write(z_file_bytes)
+                        
+                    new_doc = Document(
+                        id=z_doc_id,
+                        user_id=current_user.id,
+                        filename=os.path.basename(zip_info.filename),
+                        file_hash=z_file_hash,
+                        status="pending",
+                        document_type=doc_type_enum
+                    )
+                    db.add(new_doc)
+                    queued_ids.append(z_doc_id)
+                    background_tasks.add_task(background_process_document, z_doc_id, z_file_path)
+                    
+                await db.commit()
+                if not queued_ids:
+                    raise HTTPException(status_code=400, detail="No valid novel documents found in the ZIP archive.")
+                return BatchDocumentResponse(ids=queued_ids, message=f"Queued {len(queued_ids)} documents.")
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Invalid ZIP archive.")
 
     try:
         file_hash = generate_file_hash(file_bytes)
@@ -152,7 +248,8 @@ async def upload_document(
         user_id=current_user.id,
         filename=file.filename,
         file_hash=file_hash,
-        status="pending"
+        status="pending",
+        document_type=doc_type_enum
     )
     db.add(new_doc)
     await db.commit()
@@ -217,14 +314,25 @@ async def get_document_status(
 ):
     """
     Retrieves the current execution state of the document pipeline.
+    Results are cached in memory for 3 seconds to reduce DB load from polling.
     """
+    cache_key = f"{doc_id}:{current_user.id}"
+    now = _time.time()
+    cached = _status_cache.get(cache_key)
+    if cached and cached[0] > now:
+        return DocumentStatusResponse(id=doc_id, status=cached[1]["status"])
     stmt = select(Document).where(Document.id == doc_id, Document.user_id == current_user.id)
     result = await db.execute(stmt)
     doc = result.scalar_one_or_none()
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
-        
+
+    payload = {"id": str(doc.id), "status": doc.status}
+
+    # Cache the result for future polls.
+    _status_cache[cache_key] = (_time.time() + _STATUS_CACHE_TTL, payload)
+
     return DocumentStatusResponse(id=doc.id, status=doc.status)
 
 
@@ -339,9 +447,100 @@ async def resolve_manual_review(
     return record
 
 
+@router.get("/query/resumes", response_model=List[ExtractedResumeResponse])
+async def query_extracted_resumes(
+    min_experience: Optional[float] = None,
+    requires_review: Optional[bool] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from models.database import ExtractedResume
+    stmt = select(ExtractedResume, Document).join(Document, ExtractedResume.document_id == Document.id).where(Document.user_id == current_user.id)
+    
+    if min_experience is not None:
+        stmt = stmt.where(ExtractedResume.years_of_experience >= min_experience)
+        
+    if requires_review is not None:
+        stmt = stmt.where(ExtractedResume.needs_review == requires_review)
+        
+    result = await db.execute(stmt)
+    rows = result.all()
+    
+    response = []
+    for extracted, document in rows:
+        response.append(ExtractedResumeResponse(
+            id=extracted.id,
+            document_id=extracted.document_id,
+            candidate_name=extracted.candidate_name,
+            years_of_experience=extracted.years_of_experience,
+            education_level=extracted.education_level,
+            skills=extracted.skills,
+            previous_companies=extracted.previous_companies,
+            needs_review=extracted.needs_review,
+            filename=document.filename,
+            upload_time=document.upload_time
+        ))
+    
+    return response
+
+
+@router.patch("/review/resume/{doc_id}", response_model=ExtractedResumeResponse)
+async def resolve_resume_manual_review(
+    doc_id: uuid.UUID,
+    update_data: ExtractedResumeUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(["manager", "hr_recruiter", "Admin", "Manager"]))
+):
+    from models.database import ExtractedResume
+    stmt = select(ExtractedResume).join(Document, ExtractedResume.document_id == Document.id).where(ExtractedResume.document_id == doc_id, Document.user_id == current_user.id)
+    result = await db.execute(stmt)
+    record = result.scalar_one_or_none()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="Extracted resume not found for this document.")
+        
+    old_state = {
+        "candidate_name": record.candidate_name,
+        "years_of_experience": record.years_of_experience,
+        "education_level": record.education_level,
+        "skills": record.skills,
+        "previous_companies": record.previous_companies
+    }
+    
+    updates = update_data.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        setattr(record, key, value)
+        
+    record.needs_review = False
+    
+    await db.commit()
+    await db.refresh(record)
+    
+    audit_payload = {
+        "old_state": old_state,
+        "new_state": updates,
+        "operator_id": str(current_user.id)
+    }
+    
+    asyncio.create_task(
+        write_audit_entry(
+            doc_id=doc_id,
+            event_type="resume_manual_override_resolved",
+            model_used="human_operator",
+            input_text="MANUAL_OVERRIDE",
+            output_data=audit_payload,
+            db_session=db
+        )
+    )
+    
+    return record
+
+
 @router.post("/global-search", response_model=GlobalSearchResponse)
+@limiter.limit("20/minute")
 async def global_search(
-    request: GlobalSearchRequest,
+    request: Request,
+    body: GlobalSearchRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -350,7 +549,7 @@ async def global_search(
     Answers the query using LLM synthesis with strict prompt injection defenses.
     """
     try:
-        response = await secure_global_search(request.query, current_user.id, db)
+        response = await secure_global_search(body.query, current_user.id, db)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}")

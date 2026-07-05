@@ -118,8 +118,8 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
   const COLS = 8;
 
   return (
-    <Card className="overflow-hidden rounded-2xl border-border shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between border-b border-border bg-muted/40 py-4">
+    <Card className="overflow-hidden rounded-2xl border-white/10 bg-white/[0.06] shadow-xl shadow-black/20 backdrop-blur-xl">
+      <CardHeader className="flex flex-row items-center justify-between border-b border-white/10 bg-white/[0.03] py-4">
         <div>
           <CardTitle className="font-display text-xl">Extracted contracts</CardTitle>
           <p className="mt-0.5 text-sm text-muted-foreground">
@@ -134,7 +134,7 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
 
       <CardContent className="p-0">
         {/* Filters */}
-        <div className="flex flex-wrap items-end gap-4 border-b border-border bg-muted/20 p-4">
+        <div className="flex flex-wrap items-end gap-4 border-b border-white/10 bg-white/[0.02] p-4">
           <div className="min-w-[200px] flex-1 space-y-1.5">
             <Label htmlFor="search">Search</Label>
             <div className="relative">
@@ -199,7 +199,7 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
 
         <div className="overflow-x-auto">
           <Table>
-            <TableHeader className="bg-muted/30">
+            <TableHeader className="bg-white/[0.03]">
               <TableRow>
                 {(
                   [

@@ -30,13 +30,49 @@ def simple_chunk_text(text: str, chunk_size: int = 2000, overlap: int = 200) -> 
 
 
 async def generate_embedding(text: str) -> List[float]:
-    """Generates a vector embedding for the given text using LiteLLM."""
-    response = await litellm.aembedding(
-        model=settings.embedding_model,
-        input=text,
-        api_key=settings.gemini_api_key,
-    )
-    return response.data[0].embedding
+    """Generates a vector embedding for the given text using LiteLLM.
+
+    We explicitly request `embedding_dimensions` (768) so the returned vector
+    matches the document_chunks.embedding column. gemini-embedding-001 defaults
+    to 3072 dims, which would be rejected by the vector(768) column on insert and
+    would raise a dimension-mismatch error during cosine search.
+    """
+    from litellm.exceptions import RateLimitError
+    import asyncio
+    
+    keys = settings.get_api_keys
+    response = None
+    max_retries = 3
+    base_delay = 5
+    
+    for attempt in range(max_retries):
+        for idx, key in enumerate(keys):
+            try:
+                response = await litellm.aembedding(
+                    model=settings.embedding_model,
+                    input=text,
+                    api_key=key,
+                    dimensions=settings.embedding_dimensions,
+                )
+                break
+            except RateLimitError as e:
+                pass
+                
+        if response:
+            break
+            
+        if attempt < max_retries - 1:
+            delay = base_delay * (2 ** attempt)
+            await asyncio.sleep(delay)
+        else:
+            raise RuntimeError("API Rate limit exceeded on all keys after retries.")
+                
+    embedding = response.data[0].embedding
+    if len(embedding) != settings.embedding_dimensions:
+        # Defensive guard: some model/provider combos ignore `dimensions`.
+        # Matryoshka embeddings are safe to truncate to a smaller prefix.
+        embedding = embedding[: settings.embedding_dimensions]
+    return embedding
 
 
 async def ingest_document_to_rag(doc_id: uuid.UUID, user_id: uuid.UUID, text: str, db_session: AsyncSession):
@@ -110,14 +146,37 @@ async def secure_global_search(query: str, user_id: uuid.UUID, db_session: Async
     user_prompt = f"User Query: {query}\n\n<context>\n{combined_context}\n</context>"
     
     # Call LLM
-    response = await litellm.acompletion(
-        model=settings.llm_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        api_key=settings.gemini_api_key,
-    )
+    from litellm.exceptions import RateLimitError
+    import asyncio
+    
+    keys = settings.get_api_keys
+    response = None
+    max_retries = 3
+    base_delay = 5
+    
+    for attempt in range(max_retries):
+        for idx, key in enumerate(keys):
+            try:
+                response = await litellm.acompletion(
+                    model=settings.llm_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    api_key=key,
+                )
+                break
+            except RateLimitError as e:
+                pass
+                
+        if response:
+            break
+            
+        if attempt < max_retries - 1:
+            delay = base_delay * (2 ** attempt)
+            await asyncio.sleep(delay)
+        else:
+            raise RuntimeError("API Rate limit exceeded on all keys after retries.")
     
     answer = response.choices[0].message.content
     

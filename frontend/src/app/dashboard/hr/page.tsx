@@ -3,20 +3,18 @@
 import React, { useState, useCallback } from "react";
 import DocumentUploader from "@/components/DocumentUploader";
 import ProcessingQueue from "@/components/ProcessingQueue";
-import ExtractedDataTable from "@/components/ExtractedDataTable";
-import GlobalSearchBar from "@/components/GlobalSearchBar";
-import ReviewDrawer from "@/components/ReviewDrawer";
-import { StatsOverview } from "@/components/dashboard/StatsOverview";
-import { type ExtractedData } from "@/lib/contracts";
+import ExtractedResumeTable from "@/components/ExtractedResumeTable";
+import ReviewResumeDrawer from "@/components/ReviewResumeDrawer";
+import { type ExtractedResume } from "@/lib/resumes";
 
-export default function Dashboard() {
+export default function HRDashboard() {
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const [isReviewOpen, setIsReviewOpen] = useState(false);
-  const [selectedRow, setSelectedRow] = useState<ExtractedData | null>(null);
+  const [selectedRow, setSelectedRow] = useState<ExtractedResume | null>(null);
 
-  const [tableData, setTableData] = useState<ExtractedData[]>([]);
+  const [tableData, setTableData] = useState<ExtractedResume[]>([]);
   const [tableLoading, setTableLoading] = useState(true);
 
   const handleUploadSuccess = useCallback((docIds: string[]) => {
@@ -28,16 +26,19 @@ export default function Dashboard() {
     }
   }, []);
   const handleProcessingComplete = useCallback(() => setRefreshTrigger((p) => p + 1), []);
-  const handleRowSelect = useCallback((row: ExtractedData) => {
+  
+  const handleRowSelect = useCallback((row: ExtractedResume) => {
     setSelectedRow(row);
     setIsReviewOpen(true);
   }, []);
+  
   const handleReviewSaved = useCallback(() => setRefreshTrigger((p) => p + 1), []);
   const handleReviewClose = useCallback(() => {
     setIsReviewOpen(false);
     setSelectedRow(null);
   }, []);
-  const handleTableData = useCallback((rows: ExtractedData[], loading: boolean) => {
+  
+  const handleTableData = useCallback((rows: ExtractedResume[], loading: boolean) => {
     setTableData(rows);
     setTableLoading(loading);
   }, []);
@@ -45,13 +46,9 @@ export default function Dashboard() {
   return (
     <main className="mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8">
       <header className="space-y-1">
-        <h1 className="font-display text-3xl font-bold tracking-tight text-foreground">Legal Dashboard</h1>
-        <p className="text-muted-foreground">AI-powered contract processing and metadata extraction</p>
+        <h1 className="font-display text-3xl font-bold tracking-tight text-foreground">HR Recruiting Dashboard</h1>
+        <p className="text-muted-foreground">AI-powered resume parsing and candidate matching</p>
       </header>
-
-      <GlobalSearchBar />
-
-      <StatsOverview data={tableData} loading={tableLoading} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <section className="space-y-6 lg:col-span-1">
@@ -62,7 +59,7 @@ export default function Dashboard() {
         </section>
 
         <section className="lg:col-span-2">
-          <ExtractedDataTable
+          <ExtractedResumeTable
             onRowSelect={handleRowSelect}
             refreshTrigger={refreshTrigger}
             onDataChange={handleTableData}
@@ -70,7 +67,7 @@ export default function Dashboard() {
         </section>
       </div>
 
-      <ReviewDrawer
+      <ReviewResumeDrawer
         isOpen={isReviewOpen}
         onClose={handleReviewClose}
         data={selectedRow}

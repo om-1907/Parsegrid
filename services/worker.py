@@ -75,10 +75,10 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
         await _set_document_status(doc_id, "failed", db_session)
         return
 
-    # 3. Pass the extracted text to our async Gemini extraction function from Phase 3/4
+    # 3. Pass the extracted text to our async Gemini extraction function
     try:
         logger.info(f"Sending extracted text to Gemini LLM for structured analysis (Document {doc_id}).")
-        structured_data = await run_structured_extraction(extracted_text)
+        structured_data = await run_structured_extraction(extracted_text, document.document_type)
         logger.info(f"Successfully received and parsed structured data from Gemini (Document {doc_id}).")
         
     except LLMExtractionError as e:
@@ -93,41 +93,63 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
     # 4 & 5. Save the structured data and update status to 'completed'
     try:
         logger.info(f"Persisting structured extraction results to database for document {doc_id}.")
+        from models.database import DocumentType, ExtractedResume
         
-        # Instantiate the ExtractedData ORM model using the validated Pydantic properties
-        extracted_data_record = ExtractedData(
-            document_id=doc_id,
-            party_name=structured_data.party_name,
-            contract_value=structured_data.contract_value,
-            payment_terms_days=structured_data.payment_terms_days,
-            penalty_clause_exists=structured_data.penalty_clause_exists,
-            governing_law=structured_data.governing_law,
-            needs_review=structured_data.needs_review,  # Saved securely as per the Pydantic validator logic
-            extracted_text=extracted_text
-        )
+        if document.document_type == DocumentType.contract:
+            # Instantiate the ExtractedData ORM model using the validated Pydantic properties
+            extracted_record = ExtractedData(
+                document_id=doc_id,
+                party_name=structured_data.party_name,
+                contract_value=structured_data.contract_value,
+                payment_terms_days=structured_data.payment_terms_days,
+                penalty_clause_exists=structured_data.penalty_clause_exists,
+                governing_law=structured_data.governing_law,
+                needs_review=structured_data.needs_review,
+                extracted_text=extracted_text
+            )
+        elif document.document_type == DocumentType.resume:
+            extracted_record = ExtractedResume(
+                document_id=doc_id,
+                candidate_name=structured_data.candidate_name,
+                years_of_experience=structured_data.years_of_experience,
+                education_level=structured_data.education_level,
+                skills=structured_data.skills,
+                previous_companies=structured_data.previous_companies,
+                needs_review=structured_data.needs_review,
+                extracted_text=extracted_text
+            )
+        else:
+            raise ValueError(f"Unknown document_type {document.document_type}")
         
-        # Add to session
-        db_session.add(extracted_data_record)
-        
-        # RAG Ingestion
-        try:
-            logger.info(f"Ingesting document {doc_id} into RAG database.")
-            from services.rag_engine import ingest_document_to_rag
-            await ingest_document_to_rag(doc_id, document.user_id, extracted_text, db_session)
-        except Exception as e:
-            logger.error(f"Failed to ingest document {doc_id} into RAG: {e}", exc_info=True)
-            raise e
-        
-        # We can update the document status in the same transaction
+        # Add to session and commit the extraction result FIRST. The extracted
+        # fields are the primary deliverable, so they must be persisted before we
+        # attempt the (best-effort) RAG indexing below.
+        db_session.add(extracted_record)
         document.status = "completed"
-        
-        # Commit the transaction
         await db_session.commit()
-        logger.info(f"Pipeline completely successfully for document {doc_id}. Data saved and status marked 'completed'.")
-        
+        logger.info(f"Pipeline completed successfully for document {doc_id}. Data saved and status marked 'completed'.")
+
     except Exception as e:
         logger.error(f"Database error while saving extracted data for document {doc_id}. Details: {e}", exc_info=True)
         # Rollback the failed transaction
         await db_session.rollback()
         # Mark document as failed in a new transaction
         await _set_document_status(doc_id, "failed", db_session)
+        return
+
+    # 6. RAG ingestion — BEST EFFORT. A failure here (e.g. embedding API hiccup)
+    #    must NOT fail an otherwise-successful extraction. The document simply
+    #    won't be searchable until it is re-ingested.
+    try:
+        logger.info(f"Ingesting document {doc_id} into RAG database.")
+        from services.rag_engine import ingest_document_to_rag
+        await ingest_document_to_rag(doc_id, document.user_id, extracted_text, db_session)
+        await db_session.commit()
+        logger.info(f"Document {doc_id} successfully ingested into RAG index.")
+    except Exception as e:
+        logger.warning(
+            f"RAG ingestion failed for document {doc_id}; it remains 'completed' "
+            f"but excluded from semantic search until re-ingested. Reason: {e}",
+            exc_info=True,
+        )
+        await db_session.rollback()

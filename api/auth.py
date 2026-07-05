@@ -6,7 +6,7 @@ import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status, Response, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import bcrypt
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from services.auth_security import (
     validate_password_complexity,
 )
 from services.mailer import send_otp_email
+from middleware.rate_limiter import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -79,7 +80,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
 
 class UserResponse(BaseModel):
     id: uuid.UUID
@@ -94,12 +95,12 @@ class ForgotPasswordRequest(BaseModel):
 
 class VerifyOTPRequest(BaseModel):
     email: EmailStr
-    otp: str
+    otp: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
-    password_reset_token: str
-    new_password: str
+    password_reset_token: str = Field(..., min_length=16, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +165,8 @@ def require_role(allowed_roles: list[str]):
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.post("/register", response_model=UserResponse)
-async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def register(request: Request, user: UserCreate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == user.email))
     db_user = result.scalars().first()
     if db_user:
@@ -178,7 +180,9 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
     return new_user
 
 @router.post("/login")
+@limiter.limit("5/minute")
 async def login(
+    request: Request,
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
@@ -228,7 +232,9 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
 # ── Step 1: Request OTP ───────────────────────────────────────────────────
 
 @router.post("/forgot-password")
+@limiter.limit("3/minute")
 async def forgot_password(
+    request: Request,
     body: ForgotPasswordRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),

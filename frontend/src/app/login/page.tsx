@@ -205,21 +205,8 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* Trust strip */}
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-white/60">
-            <div className="flex items-center gap-1.5">
-              <ShieldCheck className="h-4 w-4 text-emerald-400" />
-              <span className="text-xs font-medium">Enterprise security</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Bot className="h-4 w-4 text-cyan-300" />
-              <span className="text-xs font-medium">Agentic AI</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Gauge className="h-4 w-4 text-amber-300" />
-              <span className="text-xs font-medium">Confidence scoring</span>
-            </div>
-          </div>
+
+
         </div>
 
         <p className="mt-6 text-center text-sm text-white/70">

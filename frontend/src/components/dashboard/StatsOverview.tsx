@@ -28,7 +28,7 @@ export function StatsOverview({ data, loading }: StatsOverviewProps) {
         ))}
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+      <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-5 shadow-xl shadow-black/20 backdrop-blur-xl">
         <p className="mb-3 text-sm font-semibold text-foreground">Review status</p>
         {loading ? (
           <div className="flex items-center justify-center py-6">
@@ -56,7 +56,7 @@ function StatCard({
   loading?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm transition-shadow hover:shadow-md">
+    <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-5 shadow-xl shadow-black/20 backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:bg-white/[0.1]">
       <div className="flex items-start justify-between">
         <p className="text-sm font-medium text-muted-foreground">{label}</p>
         <span className={cn("inline-flex h-9 w-9 items-center justify-center rounded-xl", tint)}>

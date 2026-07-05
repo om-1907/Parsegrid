@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { LogOut, User as UserIcon, LifeBuoy } from "lucide-react";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { ParsegridLogo } from "@/components/ParsegridLogo";
 import {
   DropdownMenu,
@@ -44,24 +43,23 @@ export function AppHeader() {
   const initials = email ? email.slice(0, 2).toUpperCase() : "PG";
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 border-b border-white/10 bg-black/40 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <Link href="/dashboard" className="flex items-center gap-2.5">
-          <ParsegridLogo />
-          <span className="ml-1 hidden rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground sm:inline">
+          <ParsegridLogo textClassName="text-white" />
+          <span className="ml-1 hidden rounded-md bg-white/10 px-2 py-0.5 text-xs font-medium text-white/70 sm:inline">
             Workspace
           </span>
         </Link>
 
         <div className="flex items-center gap-2">
-          <ThemeToggle />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-2 rounded-full border border-border bg-card py-1 pl-1 pr-3 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
+              <button className="flex items-center gap-2 rounded-full border border-white/15 bg-white/5 py-1 pl-1 pr-3 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-cyan-400 text-xs font-bold text-white">
                   {initials}
                 </span>
-                <span className="hidden max-w-[9rem] truncate text-sm font-medium text-foreground sm:block">
+                <span className="hidden max-w-[9rem] truncate text-sm font-medium text-white sm:block">
                   {email || "Account"}
                 </span>
               </button>

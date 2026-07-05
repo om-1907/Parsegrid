@@ -254,7 +254,7 @@ export default function ReviewDrawer({ isOpen, onClose, data, onSaved }: ReviewD
               {data?.document_id ? (
                 <iframe
                   src={apiUrl(`/api/v1/documents/${data.document_id}/file`)}
-                  className="absolute inset-0 h-full w-full border-0 bg-transparent"
+                  className="absolute inset-0 h-full w-full border-0 bg-white"
                   title="Document Preview"
                 />
               ) : (

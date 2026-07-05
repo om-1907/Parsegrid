@@ -112,6 +112,31 @@ before writing Next.js code**, and heed deprecation notices.
 
 ## 6. ⭐ Current in-progress work — RAG, RBAC, and CORS fixes
 
+> **2026-07-05 fix pass (post-Antigravity):** upload said **"extraction failed"** and
+> global search returned a **Gemini/vector error**. Root cause was the RAG embedding path,
+> not the LLM extraction (structured extraction was verified working). Three real bugs:
+> 1. **Embedding dimension mismatch.** `document_chunks.embedding` is `vector(768)` in the
+>    live DB, but `gemini-embedding-001` returns **3072** dims. Ingestion inserted a 3072
+>    vector into a 768 column → the whole save transaction rolled back → doc marked
+>    `failed`; search compared a 3072 query vector against the 768 column → error. Fixed by
+>    requesting 768-dim embeddings (`dimensions=settings.embedding_dimensions`, new config
+>    setting) so ingestion + query match the column; ORM `Vector(3072)` → `Vector(768)`.
+> 2. **pgvector codec conflict.** `models/database.py` registered the asyncpg-level
+>    `pgvector.asyncpg.register_vector` codec **in addition to** the SQLAlchemy `Vector`
+>    column type. SQLAlchemy stringified the list and asyncpg then re-encoded the string →
+>    `invalid input for query argument … '[0.01,…]'` on every insert/search. Removed the
+>    asyncpg codec registration (the SQLAlchemy `Vector` type handles encoding itself).
+> 3. **RAG ingestion was fatal.** In `worker.py` an ingestion failure rolled back a *good*
+>    extraction. Restructured so extracted data + `completed` status commit first, then RAG
+>    indexing runs best-effort (failure logs a warning; the doc stays `completed`).
+>
+> Also: fixed a `Badge variant="warning"` that didn't exist (added `warning`/`success`
+> variants) — this broke `next build` for the HR dashboard. Backfilled all 8 existing
+> documents via `reprocess_documents.py` (4 `failed` → `completed`, 8 chunks indexed) and
+> verified upload + global search end-to-end. **Redesigned the dashboard** to match the
+> landing page: same fixed video background, dark glassmorphism panels, glass header
+> (app-wide dark default; removed the now-redundant theme toggle).
+
 > **2026-07-04 fix pass (post-Antigravity):** the "Network error / Is the backend
 > running?" on sign-in was **two real backend bugs**, now fixed:
 > 1. **`users.role` column never existed.** Antigravity added `role` to the `User`
@@ -149,6 +174,15 @@ We have recently completed a major security and functionality overhaul:
 3. **IPv6 / Next.js Fetch Fix**:
    - Resolved a persistent "Is the backend running?" network error caused by Next.js resolving `localhost` to IPv6 (`::1`), while Uvicorn defaulted to IPv4 (`127.0.0.1`).
    - Fixed by keeping `NEXT_PUBLIC_API_URL` as `http://localhost:8000` and explicitly starting Uvicorn with `--host 0.0.0.0` so it listens on both protocols and satisfies CORS.
+
+4. **Multi-Modal Document Parsing (Contracts vs. Resumes) & Cross-Lingual Extraction**:
+   - Upgraded the `documents` table with `document_type` (`contract` vs. `resume`), `original_language`, and `parent_document_id`.
+   - Created the `extracted_resumes` PostgreSQL table and matching Pydantic schemas.
+   - Enhanced `llm_extractor.py` to prompt Gemini to dynamically route extraction logic based on document type and detect the source language.
+   - Added specific HR endpoints (`GET /api/v1/query/resumes`, `PATCH /api/v1/review/resume/{doc_id}`) for querying and reviewing resumes.
+   - Designed a dedicated `Legal Dashboard` vs `HR Dashboard` in the Next.js frontend with dynamic routing.
+   - Updated the `DocumentUploader` to feature a toggle for selecting document type before uploading.
+   - Implemented an idempotent migration runner (`apply_migration.py`) for `migrations/003_multi_modal_resumes.sql`.
 
 ---
 

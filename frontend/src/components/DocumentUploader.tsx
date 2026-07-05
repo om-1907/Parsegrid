@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { apiUrl } from "@/lib/api";
 
 interface DocumentUploaderProps {
-  onUploadSuccess: (docId: string) => void;
+  onUploadSuccess: (docIds: string[]) => void;
 }
 
 export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderProps) {
@@ -16,6 +16,7 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [documentType, setDocumentType] = useState<"contract" | "resume">("contract");
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -37,12 +38,12 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
   }, []);
 
   const uploadFile = async (file: File) => {
-    const allowedExtensions = [".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm"];
+    const allowedExtensions = [".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm", ".zip"];
     const fileName = file.name.toLowerCase();
     const hasAllowedExtension = allowedExtensions.some(ext => fileName.endsWith(ext));
     
     if (!hasAllowedExtension) {
-      const msg = "Supported formats: PDF, DOCX, TXT, MD, CSV, HTML.";
+      const msg = "Supported formats: PDF, DOCX, TXT, MD, CSV, HTML, ZIP.";
       setError(msg);
       toast.error(msg);
       return;
@@ -53,6 +54,7 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("document_type", documentType);
 
     try {
       // Using XMLHttpRequest to track progress
@@ -71,8 +73,10 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
         if (xhr.status === 202 || xhr.status === 200) {
           const response = JSON.parse(xhr.responseText);
           setUploadProgress(100);
-          toast.success(`"${file.name}" uploaded — extracting now.`);
-          onUploadSuccess(response.id);
+          const isBatch = !!response.ids;
+          const count = isBatch ? response.ids.length : 1;
+          toast.success(isBatch ? `Queued ${count} documents for extraction.` : `"${file.name}" uploaded — extracting now.`);
+          onUploadSuccess(isBatch ? response.ids : [response.id]);
         } else {
           let msg = "Upload failed with status " + xhr.status;
           try {
@@ -120,11 +124,11 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
   };
 
   return (
-    <Card className="rounded-2xl border-border shadow-sm">
+    <Card className="rounded-2xl border-white/10 bg-white/[0.06] shadow-xl shadow-black/20 backdrop-blur-xl">
       <CardContent className="pt-6">
         <div
           className={`relative border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center transition-colors
-            ${isDragging ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}
+            ${isDragging ? 'border-primary bg-primary/10' : 'border-white/15 hover:bg-white/5'}
             ${isUploading ? 'opacity-70 pointer-events-none' : ''}
           `}
           onDragEnter={handleDragIn}
@@ -134,7 +138,7 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
         >
           <input 
             type="file" 
-            accept=".pdf,.docx,.txt,.md,.csv,.html,.htm"
+            accept=".pdf,.docx,.txt,.md,.csv,.html,.htm,.zip"
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 disabled:cursor-default" 
             id="file-upload"
             onChange={handleFileChange}
@@ -149,7 +153,26 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
             )}
           </div>
 
-          <h3 className="mb-2 font-display text-xl font-semibold text-foreground">Upload contract</h3>
+          <h3 className="mb-2 font-display text-xl font-semibold text-foreground">Upload Document</h3>
+          
+          <div className="flex gap-2 mt-2 mb-4 z-20" onClick={(e) => e.stopPropagation()}>
+            <Button 
+              type="button"
+              variant={documentType === "contract" ? "default" : "outline"}
+              onClick={() => setDocumentType("contract")}
+              disabled={isUploading}
+            >
+              Contract
+            </Button>
+            <Button 
+              type="button"
+              variant={documentType === "resume" ? "default" : "outline"}
+              onClick={() => setDocumentType("resume")}
+              disabled={isUploading}
+            >
+              Resume
+            </Button>
+          </div>
           <p className="mb-6 max-w-sm text-center text-muted-foreground">
             Drag and drop your document here, or click to browse files from your computer
           </p>

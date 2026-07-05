@@ -60,7 +60,7 @@ export default function ProcessingQueue({ docId, onProcessingComplete }: Process
   const currentIndex = getStatusIndex(status);
 
   return (
-    <Card className="animate-in fade-in slide-in-from-bottom-4 rounded-2xl border-border shadow-sm duration-500">
+    <Card className="animate-in fade-in slide-in-from-bottom-4 rounded-2xl border-white/10 bg-white/[0.06] shadow-xl shadow-black/20 backdrop-blur-xl duration-500">
       <CardHeader className="pb-4">
         <CardTitle className="font-display text-lg font-semibold">Processing document</CardTitle>
         <p className="truncate font-mono text-sm text-muted-foreground">ID: {docId}</p>
