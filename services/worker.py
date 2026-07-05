@@ -7,7 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.database import Document, ExtractedData
-from services.llm_extractor import LLMExtractionError, run_structured_extraction
+from services.llm_extractor import (
+    LLMExtractionError,
+    classify_document_type,
+    run_structured_extraction,
+)
 from services.document_reader import DocumentReaderError, extract_document_text
 
 # Configure a module-level logger
@@ -74,6 +78,23 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
         logger.error(f"Unexpected catastrophic error during document extraction for document {doc_id}. Details: {e}", exc_info=True)
         await _set_document_status(doc_id, "failed", db_session)
         return
+
+    # 2b. Content-based type detection (self-correcting). The upload's document_type is
+    #     only a preset from whichever section (Contracts/Resumes) the user uploaded in.
+    #     If the actual content clearly disagrees, re-route it to the correct pipeline so a
+    #     resume dropped in the Contracts tab still lands in the Resumes section.
+    try:
+        detected_type = await classify_document_type(extracted_text)
+        if detected_type is not None and detected_type != document.document_type:
+            logger.info(
+                f"Document {doc_id}: auto-detected type '{detected_type.value}' overrides "
+                f"preset '{document.document_type.value}'. Re-routing extraction."
+            )
+            document.document_type = detected_type
+            await db_session.commit()
+    except Exception as e:
+        # Never let classification failures abort a valid extraction.
+        logger.warning(f"Type detection step failed for document {doc_id}; keeping preset. Reason: {e}")
 
     # 3. Pass the extracted text to our async Gemini extraction function
     try:

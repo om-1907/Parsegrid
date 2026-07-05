@@ -5,10 +5,16 @@ from litellm import acompletion
 from litellm.exceptions import AuthenticationError, Timeout, APIError
 
 from config import settings
-from models.schemas import ExtractedContract, ExtractedResume
+from models.schemas import ExtractedContract, ExtractedResume, DocumentClassification
 from models.database import DocumentType
 
 logger = logging.getLogger(__name__)
+
+# Only the first slice of a document is needed to tell a contract from a resume,
+# and it keeps the classification call cheap/fast.
+_CLASSIFY_PREVIEW_CHARS = 4000
+# Below this confidence we keep the user/section-provided type rather than overriding it.
+_CLASSIFY_MIN_CONFIDENCE = 0.6
 
 
 class LLMExtractionError(Exception):
@@ -29,6 +35,74 @@ class ExtractionAuthError(LLMExtractionError):
 class ExtractionParseError(LLMExtractionError):
     """Raised when the LLM response cannot be parsed into the expected JSON schema."""
     pass
+
+
+async def classify_document_type(text: str) -> DocumentType | None:
+    """
+    Runs a cheap content-based classification to decide whether `text` is a contract
+    or a resume. Used to self-correct a mismatched preset (e.g. a resume uploaded from
+    the Contracts tab). Returns the detected DocumentType, or None if the call fails or
+    the classifier is not confident enough — in which case the caller keeps the preset.
+    """
+    if not text or not text.strip():
+        return None
+
+    preview = text[:_CLASSIFY_PREVIEW_CHARS]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a document classifier. Decide whether the given text is a legal "
+                "'contract' (agreement between parties: terms, payment, governing law, "
+                "signatures) or a 'resume'/CV (a person's work experience, education, and "
+                "skills). Respond with the document_type and a confidence score."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Classify this document:\n\n{preview}",
+        },
+    ]
+
+    try:
+        from litellm.exceptions import RateLimitError
+
+        keys = settings.get_api_keys
+        response = None
+        for idx, key in enumerate(keys):
+            try:
+                response = await acompletion(
+                    model=settings.llm_model,
+                    messages=messages,
+                    response_format=DocumentClassification,
+                    api_key=key,
+                    timeout=20.0,
+                )
+                break
+            except RateLimitError:
+                logger.warning(f"Rate limit hit during classification on API key index {idx}.")
+
+        if not response:
+            logger.warning("Document classification skipped: all API keys rate limited.")
+            return None
+
+        raw_content = response.choices[0].message.content
+        if not raw_content:
+            return None
+
+        result = DocumentClassification.model_validate_json(raw_content)
+        if result.confidence < _CLASSIFY_MIN_CONFIDENCE:
+            logger.info(
+                f"Classifier detected '{result.document_type}' but confidence "
+                f"{result.confidence:.2f} < {_CLASSIFY_MIN_CONFIDENCE}; keeping preset."
+            )
+            return None
+        return DocumentType(result.document_type)
+
+    except Exception as e:
+        # Classification is best-effort; never fail the pipeline over it.
+        logger.warning(f"Document classification failed; falling back to preset. Reason: {e}")
+        return None
 
 
 async def run_structured_extraction(text: str, document_type: DocumentType):

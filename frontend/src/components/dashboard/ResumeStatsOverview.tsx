@@ -1,23 +1,28 @@
 "use client";
 
-import { FileStack, AlertTriangle, DollarSign, CalendarClock } from "lucide-react";
+import { Users, AlertTriangle, BadgeCheck, Briefcase } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { type ExtractedData, computeStats, formatCurrency } from "@/lib/contracts";
+import { type ExtractedResume, computeResumeStats } from "@/lib/resumes";
 import { cn } from "@/lib/utils";
 
-interface StatsOverviewProps {
-  data: ExtractedData[];
+interface ResumeStatsOverviewProps {
+  data: ExtractedResume[];
   loading?: boolean;
 }
 
-export function StatsOverview({ data, loading }: StatsOverviewProps) {
-  const stats = computeStats(data);
+export function ResumeStatsOverview({ data, loading }: ResumeStatsOverviewProps) {
+  const stats = computeResumeStats(data);
 
   const cards = [
-    { label: "Total contracts", value: stats.total.toLocaleString(), icon: FileStack, tint: "text-indigo-500 bg-indigo-500/10" },
-    { label: "Needs review", value: stats.needsReview.toLocaleString(), icon: AlertTriangle, tint: "text-amber-500 bg-amber-500/10" },
-    { label: "Total value", value: formatCurrency(stats.totalValue), icon: DollarSign, tint: "text-emerald-500 bg-emerald-500/10" },
-    { label: "Avg. payment terms", value: stats.avgTerms !== null ? `${Math.round(stats.avgTerms)}d` : "—", icon: CalendarClock, tint: "text-cyan-500 bg-cyan-500/10" },
+    { label: "Total resumes", value: stats.total.toLocaleString(), icon: Users, tint: "text-indigo-500 bg-indigo-500/10" },
+    { label: "Left to review", value: stats.needsReview.toLocaleString(), icon: AlertTriangle, tint: "text-amber-500 bg-amber-500/10" },
+    { label: "Reviewed", value: stats.verified.toLocaleString(), icon: BadgeCheck, tint: "text-emerald-500 bg-emerald-500/10" },
+    {
+      label: "Avg. experience",
+      value: stats.avgExperience !== null ? `${stats.avgExperience.toFixed(1)} yrs` : "—",
+      icon: Briefcase,
+      tint: "text-cyan-500 bg-cyan-500/10",
+    },
   ];
 
   return (
@@ -36,20 +41,20 @@ export function StatsOverview({ data, loading }: StatsOverviewProps) {
               <Skeleton className="h-32 w-32 rounded-full" />
             </div>
           ) : (
-            <Donut verified={stats.verified} needsReview={stats.needsReview} />
+            <Donut reviewed={stats.verified} needsReview={stats.needsReview} />
           )}
         </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Contract value distribution">
-          {loading ? <BarSkeleton /> : <BarChart data={valueBuckets(data)} emptyLabel="No contract values yet" />}
+        <Panel title="Experience distribution">
+          {loading ? <BarSkeleton /> : <BarChart data={experienceBuckets(data)} />}
         </Panel>
-        <Panel title="Payment terms mix">
-          {loading ? <BarSkeleton /> : <BarChart data={paymentTermsBuckets(data)} emptyLabel="No payment terms yet" />}
+        <Panel title="Top skills">
+          {loading ? <BarSkeleton /> : <BarChart data={topSkills(data)} emptyLabel="No skills extracted yet" />}
         </Panel>
-        <Panel title="Penalty clause">
-          {loading ? <BarSkeleton /> : <BarChart data={penaltyBreakdown(data)} emptyLabel="No penalty data yet" />}
+        <Panel title="Education level">
+          {loading ? <BarSkeleton /> : <BarChart data={educationBreakdown(data)} emptyLabel="No education data yet" />}
         </Panel>
       </div>
     </div>
@@ -60,40 +65,56 @@ export function StatsOverview({ data, loading }: StatsOverviewProps) {
 
 type Bar = { label: string; value: number };
 
-function valueBuckets(rows: ExtractedData[]): Bar[] {
+function experienceBuckets(rows: ExtractedResume[]): Bar[] {
   const buckets = [
-    { label: "< $10K", test: (v: number) => v < 10_000 },
-    { label: "$10K–100K", test: (v: number) => v >= 10_000 && v < 100_000 },
-    { label: "$100K–1M", test: (v: number) => v >= 100_000 && v < 1_000_000 },
-    { label: "$1M+", test: (v: number) => v >= 1_000_000 },
+    { label: "Junior (0–2y)", test: (y: number) => y <= 2 },
+    { label: "Mid (3–5y)", test: (y: number) => y >= 3 && y <= 5 },
+    { label: "Senior (6–10y)", test: (y: number) => y >= 6 && y <= 10 },
+    { label: "Lead (10y+)", test: (y: number) => y > 10 },
   ];
   return buckets.map((b) => ({
     label: b.label,
-    value: rows.filter((r) => typeof r.contract_value === "number" && b.test(r.contract_value as number)).length,
+    value: rows.filter((r) => typeof r.years_of_experience === "number" && b.test(r.years_of_experience as number)).length,
   }));
 }
 
-function paymentTermsBuckets(rows: ExtractedData[]): Bar[] {
-  const buckets = [
-    { label: "Net 0–30", test: (d: number) => d <= 30 },
-    { label: "Net 31–60", test: (d: number) => d > 30 && d <= 60 },
-    { label: "Net 61–90", test: (d: number) => d > 60 && d <= 90 },
-    { label: "Net 90+", test: (d: number) => d > 90 },
-  ];
-  return buckets.map((b) => ({
-    label: b.label,
-    value: rows.filter((r) => typeof r.payment_terms_days === "number" && b.test(r.payment_terms_days as number)).length,
-  }));
+function topSkills(rows: ExtractedResume[], limit = 5): Bar[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    for (const skill of r.skills ?? []) {
+      const key = skill.trim();
+      if (!key) continue;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([label, value]) => ({ label, value }));
 }
 
-function penaltyBreakdown(rows: ExtractedData[]): Bar[] {
-  const withClause = rows.filter((r) => r.penalty_clause_exists === true).length;
-  const without = rows.filter((r) => r.penalty_clause_exists === false).length;
-  return [
-    { label: "Has penalty clause", value: withClause },
-    { label: "No penalty clause", value: without },
-  ];
+function educationBreakdown(rows: ExtractedResume[]): Bar[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const level = normalizeEducation(r.education_level);
+    counts.set(level, (counts.get(level) ?? 0) + 1);
+  }
+  const order = ["PhD", "Master's", "Bachelor's", "Other"];
+  return [...counts.entries()]
+    .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
+    .map(([label, value]) => ({ label, value }));
 }
+
+function normalizeEducation(level: string | null): string {
+  if (!level) return "Other";
+  const l = level.toLowerCase();
+  if (l.includes("phd") || l.includes("doctor")) return "PhD";
+  if (l.includes("master") || l.includes("mba") || l.includes("m.s") || l.includes("msc")) return "Master's";
+  if (l.includes("bachelor") || l.includes("b.s") || l.includes("bsc") || l.includes("b.a") || l.includes("undergrad")) return "Bachelor's";
+  return "Other";
+}
+
+/* ─────────────────────────── presentational ─────────────────────────── */
 
 function StatCard({
   label,
@@ -174,12 +195,12 @@ function BarSkeleton() {
   );
 }
 
-function Donut({ verified, needsReview }: { verified: number; needsReview: number }) {
-  const total = verified + needsReview;
+function Donut({ reviewed, needsReview }: { reviewed: number; needsReview: number }) {
+  const total = reviewed + needsReview;
   const r = 52;
   const c = 2 * Math.PI * r;
-  const verifiedFrac = total > 0 ? verified / total : 0;
-  const verifiedLen = c * verifiedFrac;
+  const reviewedFrac = total > 0 ? reviewed / total : 0;
+  const reviewedLen = c * reviewedFrac;
 
   return (
     <div className="flex items-center gap-4">
@@ -195,27 +216,27 @@ function Donut({ verified, needsReview }: { verified: number; needsReview: numbe
               stroke="hsl(var(--success))"
               strokeWidth="14"
               strokeLinecap="round"
-              strokeDasharray={`${verifiedLen} ${c - verifiedLen}`}
+              strokeDasharray={`${reviewedLen} ${c - reviewedLen}`}
               className="transition-[stroke-dasharray] duration-700"
             />
           )}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <span className="font-display text-2xl font-bold text-foreground">
-            {total > 0 ? Math.round(verifiedFrac * 100) : 0}%
+            {total > 0 ? Math.round(reviewedFrac * 100) : 0}%
           </span>
-          <span className="text-xs text-muted-foreground">verified</span>
+          <span className="text-xs text-muted-foreground">reviewed</span>
         </div>
       </div>
       <div className="space-y-2 text-sm">
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-success" />
-          <span className="text-muted-foreground">Verified</span>
-          <span className="ml-auto font-semibold text-foreground">{verified}</span>
+          <span className="text-muted-foreground">Reviewed</span>
+          <span className="ml-auto font-semibold text-foreground">{reviewed}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-muted-foreground/40" />
-          <span className="text-muted-foreground">Needs review</span>
+          <span className="text-muted-foreground">Left to review</span>
           <span className="ml-auto font-semibold text-foreground">{needsReview}</span>
         </div>
       </div>

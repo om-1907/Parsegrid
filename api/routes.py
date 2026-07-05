@@ -59,6 +59,8 @@ class DocumentResponse(BaseModel):
 class BatchDocumentResponse(BaseModel):
     ids: List[uuid.UUID]
     message: str
+    skipped: int = 0
+    errors: List[str] = Field(default_factory=list)
 
 class DocumentStatusResponse(BaseModel):
     id: uuid.UUID
@@ -120,149 +122,145 @@ _STATUS_CACHE_TTL = 3  # seconds
 
 # --- Endpoints ---
 
-@router.post("/upload", response_model=Union[DocumentResponse, BatchDocumentResponse], status_code=status.HTTP_202_ACCEPTED)
+# File types accepted directly and inside ZIP archives.
+INNER_ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm"}
+ALLOWED_EXTENSIONS = INNER_ALLOWED_EXTENSIONS | {".zip"}
+
+
+@router.post("/upload", response_model=BatchDocumentResponse, status_code=status.HTTP_202_ACCEPTED)
 @limiter.limit("10/minute")
 async def upload_document(
     request: Request,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     document_type: str = Form(default="contract"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Uploads a PDF document or a ZIP archive containing multiple documents.
-    Checks for duplicates using SHA256. If valid and novel, saves to storage
-    and triggers the extraction pipeline asynchronously.
+    Uploads one or more documents (and/or ZIP archives containing many documents) in a
+    single request. Each file is de-duplicated by SHA-256 (per user, and within the same
+    batch); novel files are saved to storage and queued for async extraction.
+
+    The `document_type` acts as a preset — the background pipeline may auto-correct it based
+    on the file's actual content (see services/worker.py).
+
+    Always returns a BatchDocumentResponse: the ids queued, a count of skipped duplicates,
+    and any per-file errors (so one bad file never fails the whole batch).
     """
     try:
         doc_type_enum = DocumentType(document_type)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid document_type. Must be 'contract' or 'resume'.")
+        raise HTTPException(status_code=400, detail="Invalid document_type. Must be 'contract' or 'resume'.")
 
-    allowed_extensions = {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm", ".zip"}
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Filename is missing.")
-        
-    _, ext = os.path.splitext(file.filename.lower())
-    if ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type. Supported formats are: {', '.join(allowed_extensions)}"
-        )
-        
-    file_bytes = await file.read()
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were uploaded.")
 
-    if len(file_bytes) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds the maximum allowed size of {MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
-        )
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    queued_ids: List[uuid.UUID] = []
+    skipped = 0
+    errors: List[str] = []
+    seen_hashes: set[str] = set()  # in-batch dedup (session isn't flushed until the end)
 
-    if ext == ".zip":
-        try:
-            with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
-                queued_ids = []
-                for zip_info in z.infolist():
-                    if zip_info.is_dir(): continue
-                    # Skip hidden files
-                    if zip_info.filename.startswith("__MACOSX/") or zip_info.filename.split("/")[-1].startswith("."):
-                        continue
-                    _, z_ext = os.path.splitext(zip_info.filename.lower())
-                    if z_ext not in {".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm"}:
-                        continue
-                        
-                    z_file_bytes = z.read(zip_info.filename)
-                    if not z_file_bytes: continue
-                    
-                    z_file_hash = generate_file_hash(z_file_bytes)
-                    
-                    # Check if exists
-                    stmt = select(Document).where(Document.file_hash == z_file_hash, Document.user_id == current_user.id)
-                    result = await db.execute(stmt)
-                    if result.scalar_one_or_none():
-                        continue # Skip existing documents in batch
-                        
-                    z_doc_id = uuid.uuid4()
-                    z_unique_filename = f"{z_doc_id}{z_ext}"
-                    z_file_path = os.path.join(STORAGE_DIR, z_unique_filename)
-                    
-                    with open(z_file_path, "wb") as f:
-                        f.write(z_file_bytes)
-                        
-                    new_doc = Document(
-                        id=z_doc_id,
-                        user_id=current_user.id,
-                        filename=os.path.basename(zip_info.filename),
-                        file_hash=z_file_hash,
-                        status="pending",
-                        document_type=doc_type_enum
-                    )
-                    db.add(new_doc)
-                    queued_ids.append(z_doc_id)
-                    background_tasks.add_task(background_process_document, z_doc_id, z_file_path)
-                    
-                await db.commit()
-                if not queued_ids:
-                    raise HTTPException(status_code=400, detail="No valid novel documents found in the ZIP archive.")
-                return BatchDocumentResponse(ids=queued_ids, message=f"Queued {len(queued_ids)} documents.")
-        except zipfile.BadZipFile:
-            raise HTTPException(status_code=400, detail="Invalid ZIP archive.")
-
-    try:
+    async def _ingest(file_bytes: bytes, original_filename: str, ext: str) -> str:
+        """Save + queue a single document. Returns 'queued' or 'skipped'."""
+        nonlocal skipped
         file_hash = generate_file_hash(file_bytes)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to generate file hash: {e}")
-        
-    # Check if a document with this exact file_hash already exists for this user
-    stmt = select(Document).where(Document.file_hash == file_hash, Document.user_id == current_user.id)
-    result = await db.execute(stmt)
-    existing_doc = result.scalar_one_or_none()
-    
-    if existing_doc:
-        # Return 200 immediately to save processing and API costs
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "id": str(existing_doc.id),
-                "filename": existing_doc.filename,
-                "status": existing_doc.status,
-                "message": "Document already exists. Returning cached processing state."
-            }
-        )
-        
-    # Novel document flow
-    doc_id = uuid.uuid4()
-    unique_filename = f"{doc_id}{ext}"
-    file_path = os.path.join(STORAGE_DIR, unique_filename)
-    
-    # Save the binary to the storage directory
-    with open(file_path, "wb") as f:
-        f.write(file_bytes)
-        
-    # Insert new record into the documents table
-    new_doc = Document(
-        id=doc_id,
-        user_id=current_user.id,
-        filename=file.filename,
-        file_hash=file_hash,
-        status="pending",
-        document_type=doc_type_enum
-    )
-    db.add(new_doc)
+
+        # Duplicate within this same batch?
+        if file_hash in seen_hashes:
+            skipped += 1
+            return "skipped"
+
+        # Duplicate already in the DB for this user?
+        stmt = select(Document).where(Document.file_hash == file_hash, Document.user_id == current_user.id)
+        if (await db.execute(stmt)).scalar_one_or_none():
+            skipped += 1
+            return "skipped"
+
+        seen_hashes.add(file_hash)
+        doc_id = uuid.uuid4()
+        file_path = os.path.join(STORAGE_DIR, f"{doc_id}{ext}")
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+
+        db.add(Document(
+            id=doc_id,
+            user_id=current_user.id,
+            filename=original_filename,
+            file_hash=file_hash,
+            status="pending",
+            document_type=doc_type_enum,
+        ))
+        queued_ids.append(doc_id)
+        background_tasks.add_task(background_process_document, doc_id, file_path)
+        return "queued"
+
+    for upload in files:
+        if not upload.filename:
+            errors.append("A file was missing its filename.")
+            continue
+
+        _, ext = os.path.splitext(upload.filename.lower())
+        if ext not in ALLOWED_EXTENSIONS:
+            errors.append(f"{upload.filename}: unsupported file type.")
+            continue
+
+        file_bytes = await upload.read()
+        if len(file_bytes) > MAX_UPLOAD_BYTES:
+            errors.append(f"{upload.filename}: exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.")
+            continue
+        if not file_bytes:
+            errors.append(f"{upload.filename}: file is empty.")
+            continue
+
+        if ext == ".zip":
+            try:
+                with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+                    for zip_info in z.infolist():
+                        if zip_info.is_dir():
+                            continue
+                        # Skip macOS metadata and dotfiles.
+                        if zip_info.filename.startswith("__MACOSX/") or zip_info.filename.split("/")[-1].startswith("."):
+                            continue
+                        _, z_ext = os.path.splitext(zip_info.filename.lower())
+                        if z_ext not in INNER_ALLOWED_EXTENSIONS:
+                            continue
+
+                        z_bytes = z.read(zip_info.filename)
+                        if not z_bytes:
+                            continue
+                        if len(z_bytes) > MAX_UPLOAD_BYTES:
+                            errors.append(f"{zip_info.filename}: exceeds the size limit.")
+                            continue
+                        try:
+                            await _ingest(z_bytes, os.path.basename(zip_info.filename), z_ext)
+                        except Exception as e:
+                            errors.append(f"{zip_info.filename}: {e}")
+            except zipfile.BadZipFile:
+                errors.append(f"{upload.filename}: invalid ZIP archive.")
+        else:
+            try:
+                await _ingest(file_bytes, upload.filename, ext)
+            except Exception as e:
+                errors.append(f"{upload.filename}: {e}")
+
     await db.commit()
-    
-    # Trigger process_document_pipeline in the background
-    background_tasks.add_task(background_process_document, doc_id, file_path)
-    
-    return DocumentResponse(
-        id=doc_id,
-        filename=file.filename,
-        status="pending",
-        message="Document uploaded successfully and queued for processing."
-    )
+
+    if not queued_ids:
+        # Nothing new queued: distinguish "all duplicates" from "all invalid".
+        if skipped and not errors:
+            raise HTTPException(status_code=409, detail="All uploaded documents already exist.")
+        detail = "No valid new documents found."
+        if errors:
+            detail += " " + " ".join(errors)
+        raise HTTPException(status_code=400, detail=detail)
+
+    message = f"Queued {len(queued_ids)} document(s) for extraction."
+    if skipped:
+        message += f" Skipped {skipped} duplicate(s)."
+    if errors:
+        message += f" {len(errors)} file(s) could not be processed."
+    return BatchDocumentResponse(ids=queued_ids, message=message, skipped=skipped, errors=errors)
 
 
 @router.get("/documents/{doc_id}/file")
@@ -549,7 +547,8 @@ async def global_search(
     Answers the query using LLM synthesis with strict prompt injection defenses.
     """
     try:
-        response = await secure_global_search(body.query, current_user.id, db)
+        scope = DocumentType(body.document_type) if body.document_type else None
+        response = await secure_global_search(body.query, current_user.id, db, document_type=scope)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}")

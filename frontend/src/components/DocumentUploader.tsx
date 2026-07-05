@@ -8,15 +8,20 @@ import { Button } from "@/components/ui/button";
 import { apiUrl } from "@/lib/api";
 
 interface DocumentUploaderProps {
+  /** The section preset. The backend may still auto-correct this from the file's content. */
+  documentType: "contract" | "resume";
   onUploadSuccess: (docIds: string[]) => void;
 }
 
-export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderProps) {
+const ALLOWED_EXTENSIONS = [".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm", ".zip"];
+
+export default function DocumentUploader({ documentType, onUploadSuccess }: DocumentUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [documentType, setDocumentType] = useState<"contract" | "resume">("contract");
+
+  const label = documentType === "resume" ? "resume(s)" : "contract(s)";
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -37,35 +42,38 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
     setIsDragging(false);
   }, []);
 
-  const uploadFile = async (file: File) => {
-    const allowedExtensions = [".pdf", ".docx", ".txt", ".md", ".csv", ".html", ".htm", ".zip"];
-    const fileName = file.name.toLowerCase();
-    const hasAllowedExtension = allowedExtensions.some(ext => fileName.endsWith(ext));
-    
-    if (!hasAllowedExtension) {
-      const msg = "Supported formats: PDF, DOCX, TXT, MD, CSV, HTML, ZIP.";
+  const uploadFiles = (fileList: FileList) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    const rejected = files.filter(
+      (f) => !ALLOWED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))
+    );
+    if (rejected.length > 0) {
+      const msg = `Unsupported file(s): ${rejected.map((f) => f.name).join(", ")}. Allowed: PDF, DOCX, TXT, MD, CSV, HTML, ZIP.`;
       setError(msg);
       toast.error(msg);
       return;
     }
+
     setError(null);
     setIsUploading(true);
     setUploadProgress(0);
 
+    // All files go up in ONE request (the backend accepts a list). This keeps large
+    // batches under the per-request upload rate limit and lets a ZIP expand server-side.
     const formData = new FormData();
-    formData.append("file", file);
+    files.forEach((f) => formData.append("files", f));
     formData.append("document_type", documentType);
 
     try {
-      // Using XMLHttpRequest to track progress
       const xhr = new XMLHttpRequest();
       xhr.open("POST", apiUrl("/api/v1/upload"), true);
       xhr.withCredentials = true;
-      
+
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
-          const percentComplete = Math.round((event.loaded / event.total) * 100);
-          setUploadProgress(percentComplete);
+          setUploadProgress(Math.round((event.loaded / event.total) * 100));
         }
       };
 
@@ -73,15 +81,21 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
         if (xhr.status === 202 || xhr.status === 200) {
           const response = JSON.parse(xhr.responseText);
           setUploadProgress(100);
-          const isBatch = !!response.ids;
-          const count = isBatch ? response.ids.length : 1;
-          toast.success(isBatch ? `Queued ${count} documents for extraction.` : `"${file.name}" uploaded — extracting now.`);
-          onUploadSuccess(isBatch ? response.ids : [response.id]);
+
+          const ids: string[] = response.ids ?? (response.id ? [response.id] : []);
+          const skipped: number = response.skipped ?? 0;
+          const errs: string[] = response.errors ?? [];
+
+          let msg = `Queued ${ids.length} ${label} for extraction.`;
+          if (skipped) msg += ` Skipped ${skipped} duplicate(s).`;
+          toast.success(msg);
+          if (errs.length > 0) toast.warning(`${errs.length} file(s) had issues: ${errs.slice(0, 3).join("; ")}`);
+
+          if (ids.length > 0) onUploadSuccess(ids);
         } else {
           let msg = "Upload failed with status " + xhr.status;
           try {
-            const errResponse = JSON.parse(xhr.responseText);
-            msg = errResponse.detail || msg;
+            msg = JSON.parse(xhr.responseText).detail || msg;
           } catch {
             /* non-JSON error body */
           }
@@ -107,19 +121,24 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
     }
   };
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      uploadFile(e.dataTransfer.files[0]);
-    }
-  }, []);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        uploadFiles(e.dataTransfer.files);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [documentType]
+  );
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      uploadFile(e.target.files[0]);
+      uploadFiles(e.target.files);
+      // Allow re-selecting the same file(s) again.
+      e.target.value = "";
     }
   };
 
@@ -128,18 +147,19 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
       <CardContent className="pt-6">
         <div
           className={`relative border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center transition-colors
-            ${isDragging ? 'border-primary bg-primary/10' : 'border-white/15 hover:bg-white/5'}
-            ${isUploading ? 'opacity-70 pointer-events-none' : ''}
+            ${isDragging ? "border-primary bg-primary/10" : "border-white/15 hover:bg-white/5"}
+            ${isUploading ? "opacity-70 pointer-events-none" : ""}
           `}
           onDragEnter={handleDragIn}
           onDragLeave={handleDragOut}
           onDragOver={handleDrag}
           onDrop={handleDrop}
         >
-          <input 
-            type="file" 
+          <input
+            type="file"
+            multiple
             accept=".pdf,.docx,.txt,.md,.csv,.html,.htm,.zip"
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 disabled:cursor-default" 
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 disabled:cursor-default"
             id="file-upload"
             onChange={handleFileChange}
             disabled={isUploading}
@@ -153,28 +173,13 @@ export default function DocumentUploader({ onUploadSuccess }: DocumentUploaderPr
             )}
           </div>
 
-          <h3 className="mb-2 font-display text-xl font-semibold text-foreground">Upload Document</h3>
-          
-          <div className="flex gap-2 mt-2 mb-4 z-20" onClick={(e) => e.stopPropagation()}>
-            <Button 
-              type="button"
-              variant={documentType === "contract" ? "default" : "outline"}
-              onClick={() => setDocumentType("contract")}
-              disabled={isUploading}
-            >
-              Contract
-            </Button>
-            <Button 
-              type="button"
-              variant={documentType === "resume" ? "default" : "outline"}
-              onClick={() => setDocumentType("resume")}
-              disabled={isUploading}
-            >
-              Resume
-            </Button>
-          </div>
+          <h3 className="mb-2 font-display text-xl font-semibold text-foreground">
+            Upload {documentType === "resume" ? "Resumes" : "Contracts"}
+          </h3>
           <p className="mb-6 max-w-sm text-center text-muted-foreground">
-            Drag and drop your document here, or click to browse files from your computer
+            Drag &amp; drop one or more files here, or click to browse. Upload a{" "}
+            <span className="font-medium text-foreground">.zip</span> to process up to dozens of
+            documents at once.
           </p>
 
           <Button variant="default" className="pointer-events-none" disabled={isUploading}>

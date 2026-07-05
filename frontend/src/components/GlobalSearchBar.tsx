@@ -16,11 +16,21 @@ interface GlobalSearchResponse {
   sources: ChunkResult[];
 }
 
-export default function GlobalSearchBar() {
+interface GlobalSearchBarProps {
+  /** Scopes the semantic search to only this kind of document. */
+  documentType: "contract" | "resume";
+}
+
+export default function GlobalSearchBar({ documentType }: GlobalSearchBarProps) {
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<GlobalSearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const placeholder =
+    documentType === "resume"
+      ? "Ask about your resumes (e.g. 'Who has the most Python experience?')"
+      : "Ask about your contracts (e.g. 'What is the standard payment term?')";
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,24 +41,21 @@ export default function GlobalSearchBar() {
     setResult(null);
 
     try {
-      // POST /api/v1/global-search
+      // POST /api/v1/global-search — scoped to the active section.
       const data = await apiFetch<GlobalSearchResponse>("/api/v1/global-search", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query: query.trim() }),
+        body: JSON.stringify({ query: query.trim(), document_type: documentType }),
       });
       setResult(data);
     } catch (err: any) {
-      setError(err.message || "Failed to execute global search.");
+      setError(err.message || "Failed to execute search.");
     } finally {
       setIsLoading(false);
     }
   };
-
-  // Sanitize LLM answer and chunks against potential prompt injection / XSS from poisoned PDFs
-  const cleanAnswer = result ? DOMPurify.sanitize(result.answer) : "";
 
   return (
     <div className="w-full mx-auto mb-8">
@@ -57,7 +64,7 @@ export default function GlobalSearchBar() {
         <input
           type="text"
           className="w-full pl-12 pr-4 py-3 bg-white/[0.06] border border-white/10 backdrop-blur-xl rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-all shadow-xl shadow-black/20"
-          placeholder="Ask a question about your documents (e.g. 'What is the standard payment term?')"
+          placeholder={placeholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -81,10 +88,11 @@ export default function GlobalSearchBar() {
           <h3 className="font-semibold text-lg flex items-center gap-2">
             ✨ AI Analysis
           </h3>
-          <div
-            className="prose prose-sm prose-invert max-w-none text-muted-foreground leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: cleanAnswer }}
-          />
+          {/* The LLM answer is plain text; render it as text (whitespace preserved) rather
+              than injecting it as HTML. */}
+          <p className="max-w-none whitespace-pre-wrap text-muted-foreground leading-relaxed">
+            {result.answer}
+          </p>
 
           {result.sources.length > 0 && (
             <div className="pt-4 border-t border-border mt-6">

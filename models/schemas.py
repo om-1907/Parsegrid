@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -159,6 +159,21 @@ class ExtractedResume(BaseModel):
         return self
 
 
+class DocumentClassification(BaseModel):
+    """Lightweight content-based classification used to auto-route a document to the
+    correct extraction pipeline (contract vs. resume), self-correcting a wrong preset."""
+    document_type: Literal["contract", "resume"] = Field(
+        ...,
+        description="The detected document type based on its actual content."
+    )
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="How confident the classifier is in this type (0.0 to 1.0)."
+    )
+
+
 class GlobalSearchRequest(BaseModel):
     """Payload for the global search endpoint."""
     query: str = Field(
@@ -166,6 +181,10 @@ class GlobalSearchRequest(BaseModel):
         min_length=1,
         max_length=1000,
         description="The user's natural language search query."
+    )
+    document_type: Optional[Literal["contract", "resume"]] = Field(
+        default=None,
+        description="Optional filter to scope the search to only contracts or only resumes."
     )
 
 

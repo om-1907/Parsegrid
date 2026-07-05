@@ -1,12 +1,12 @@
 import uuid
-from typing import List
+from typing import List, Optional
 
 import litellm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from models.database import DocumentChunk
+from models.database import Document, DocumentChunk, DocumentType
 from models.schemas import ChunkResult, GlobalSearchResponse
 
 
@@ -95,21 +95,33 @@ async def ingest_document_to_rag(doc_id: uuid.UUID, user_id: uuid.UUID, text: st
     await db_session.flush()
 
 
-async def secure_global_search(query: str, user_id: uuid.UUID, db_session: AsyncSession) -> GlobalSearchResponse:
+async def secure_global_search(
+    query: str,
+    user_id: uuid.UUID,
+    db_session: AsyncSession,
+    document_type: Optional[DocumentType] = None,
+) -> GlobalSearchResponse:
     """
     Generates embedding for query, finds top 5 chunks for the specific user, and returns LLM synthesized answer.
-    Strictly filters by user_id for tenant isolation.
+    Strictly filters by user_id for tenant isolation. When `document_type` is provided, the
+    search is scoped to only that kind of document (contracts or resumes) by joining Document.
     """
     query_embedding = await generate_embedding(query)
-    
+
     # RLS-like Tenant Isolation: MUST filter by user_id
     stmt = (
         select(DocumentChunk, DocumentChunk.embedding.cosine_distance(query_embedding).label("distance"))
         .where(DocumentChunk.user_id == user_id)
-        .order_by("distance")
-        .limit(5)
     )
-    
+
+    # Optional section scoping: restrict to chunks whose parent document matches the type.
+    if document_type is not None:
+        stmt = stmt.join(Document, DocumentChunk.document_id == Document.id).where(
+            Document.document_type == document_type
+        )
+
+    stmt = stmt.order_by("distance").limit(5)
+
     result = await db_session.execute(stmt)
     rows = result.all()
     
@@ -179,7 +191,11 @@ async def secure_global_search(query: str, user_id: uuid.UUID, db_session: Async
             raise RuntimeError("API Rate limit exceeded on all keys after retries.")
     
     answer = response.choices[0].message.content
-    
+    # answer is a required str on GlobalSearchResponse; guard against an empty/None
+    # completion so we return a clean message instead of a 500.
+    if not answer or not answer.strip():
+        answer = "Information not found."
+
     return GlobalSearchResponse(
         answer=answer,
         sources=sources
