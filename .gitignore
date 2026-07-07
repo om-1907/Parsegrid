@@ -25,3 +25,6 @@ storage/
 Thumbs.db
 *.db
 *.zip
+
+# Logs (e.g. server.log from local runs / batch tests)
+*.log

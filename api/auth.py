@@ -202,13 +202,21 @@ async def login(
         expires_delta=access_token_expires,
     )
 
+    # Cross-site cookie flags. When the frontend is on a different domain than
+    # this API (the production setup — e.g. Vercel frontend + separate backend
+    # host), the browser only sends the cookie on cross-site requests if it is
+    # SameSite=None AND Secure. Locally (same-site over http) that combo is
+    # rejected, so fall back to Lax. `secure` tracks the same production flag,
+    # keeping the required None+Secure pairing consistent.
+    cookie_samesite = "none" if settings.is_production else "lax"
+
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        samesite="lax",
+        samesite=cookie_samesite,
         secure=settings.is_production,
     )
 
@@ -216,7 +224,14 @@ async def login(
 
 @router.post("/logout")
 async def logout(response: Response):
-    response.delete_cookie("access_token", samesite="lax")
+    # Match the attributes used when the cookie was set, or the browser may
+    # refuse to clear it.
+    response.delete_cookie(
+        "access_token",
+        samesite="none" if settings.is_production else "lax",
+        secure=settings.is_production,
+        httponly=True,
+    )
     return {"message": "Logged out successfully"}
 
 @router.get("/me", response_model=UserResponse)

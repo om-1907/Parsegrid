@@ -40,6 +40,11 @@ class Settings(BaseSettings):
             raise ValueError("No Gemini API keys provided. Set GEMINI_API_KEYS in .env")
         return keys
 
+    @property
+    def get_cors_origins(self) -> list[str]:
+        """Parsed list of browser origins allowed by CORS (from the comma-separated setting)."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
     # LiteLLM model identifiers. Kept configurable so extraction / RAG synthesis
     # can be pointed at a different model without code changes.
     llm_model: str = Field(default="gemini/gemini-2.5-flash", description="Chat model for extraction & RAG synthesis")
@@ -53,6 +58,47 @@ class Settings(BaseSettings):
     # Application settings
     environment: str = Field(default="development", alias="ENVIRONMENT")
     debug: bool = Field(default=False, alias="DEBUG")
+
+    # Comma-separated list of browser Origins allowed to call this API (CORS).
+    # The frontend runs on a different origin in production (e.g. Vercel), so its
+    # URL MUST be listed here or the browser blocks every request. In production
+    # set CORS_ORIGINS to your deployed frontend URL(s), e.g.
+    # "https://your-app.vercel.app" (multiple separated by commas). Defaults to
+    # the local Next.js dev server. Parsed via the `get_cors_origins` property.
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        description="Comma-separated browser origins allowed by CORS",
+        alias="CORS_ORIGINS",
+    )
+
+    # Caps how many document-extraction pipelines run concurrently. Each pipeline
+    # holds a DB connection and makes LLM/embedding API calls, so an unbounded
+    # batch upload would exhaust the connection pool and hit provider rate limits.
+    # A global asyncio.Semaphore in services/worker.py enforces this ceiling.
+    # Default of 3 is tuned for a small pool of free-tier Gemini keys: a live
+    # 20-doc batch test showed concurrency=5 outran the free-tier requests/minute
+    # quota (~40% of docs hit "rate limit exceeded on all keys" despite the
+    # extractor's 3x backoff retry). Lower concurrency spreads LLM calls over more
+    # time, letting the retry/backoff actually recover. Raise it with more keys or
+    # a paid tier.
+    extraction_concurrency: int = Field(
+        default=3,
+        ge=1,
+        description="Max number of document extraction pipelines allowed to run simultaneously",
+        alias="EXTRACTION_CONCURRENCY",
+    )
+
+    # SQLAlchemy connection-pool sizing. CRITICAL: pool_size + max_overflow must
+    # stay UNDER the Supabase pooler's client limit (session mode caps at 15 on
+    # the default plan). Exceeding it makes Supabase reject connections with
+    # "EMAXCONNSESSION max clients reached", which strands in-flight documents in
+    # 'pending'/'failed' under batch load. Default total = 8 + 4 = 12 (headroom < 15).
+    db_pool_size: int = Field(
+        default=8, ge=1, description="Baseline persistent DB connections", alias="DB_POOL_SIZE"
+    )
+    db_max_overflow: int = Field(
+        default=4, ge=0, description="Extra DB connections allowed during spikes", alias="DB_MAX_OVERFLOW"
+    )
 
     # When True, the DB connection stays TLS-encrypted but skips CA/hostname
     # verification. Needed for local dev against the Supabase pooler (private CA)

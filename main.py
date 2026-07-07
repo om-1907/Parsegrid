@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import text
 
+from config import settings
 from api.routes import router
 from api.auth import router as auth_router
 from models.database import Base, async_engine, AsyncSessionLocal
@@ -108,9 +109,11 @@ app = FastAPI(
 # ── Middleware Stack (order matters: last added = first executed) ─────────
 
 # 1. CORS — must be outermost to handle preflight OPTIONS requests.
+#    Origins come from the CORS_ORIGINS env var (see config.py) so the deployed
+#    frontend URL can be allowlisted per-environment without a code change.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.get_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

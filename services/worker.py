@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from models.database import Document, ExtractedData
 from services.llm_extractor import (
     LLMExtractionError,
@@ -16,6 +17,44 @@ from services.document_reader import DocumentReaderError, extract_document_text
 
 # Configure a module-level logger
 logger = logging.getLogger(__name__)
+
+
+# Global concurrency gate for the extraction pipeline. A single large batch
+# upload can queue dozens of background tasks at once; without a ceiling they
+# would all run in parallel, each holding a DB connection and firing LLM /
+# embedding API calls, which exhausts the connection pool and trips provider
+# rate limits (the root cause of the "stuck pending / failed" symptom).
+#
+# The semaphore is created lazily on the running event loop so it binds to the
+# correct loop under both the app server and standalone scripts/tests.
+_extraction_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_extraction_semaphore() -> asyncio.Semaphore:
+    global _extraction_semaphore
+    if _extraction_semaphore is None:
+        _extraction_semaphore = asyncio.Semaphore(settings.extraction_concurrency)
+    return _extraction_semaphore
+
+
+def _collect_confidence(structured_data, fields: tuple[str, ...]) -> tuple[dict, dict]:
+    """Build the per-field confidence and source-quote maps the dashboard renders.
+
+    The extraction schema exposes ``<field>_confidence`` (0..1) and
+    ``<field>_source_quote`` for each extracted field. We collapse those into two
+    plain dicts keyed by field name so they persist to the JSON columns and the
+    API can return them without a column per field.
+    """
+    confidence: dict = {}
+    source_quotes: dict = {}
+    for f in fields:
+        score = getattr(structured_data, f"{f}_confidence", None)
+        if score is not None:
+            confidence[f] = score
+        quote = getattr(structured_data, f"{f}_source_quote", None)
+        if quote:
+            source_quotes[f] = quote
+    return confidence, source_quotes
 
 
 async def _set_document_status(doc_id: UUID, status: str, db_session: AsyncSession) -> Optional[Document]:
@@ -50,11 +89,23 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
     4. Save validated data to the extracted_data table
     5. Update status to 'completed' (or 'failed' if any step aborts)
 
+    Concurrency across the whole application is capped by a global semaphore
+    (see ``settings.extraction_concurrency``). Waiting to acquire it is cheap:
+    the document simply stays 'pending' in the DB until a slot frees up, so a
+    large batch drains steadily instead of overwhelming the DB pool / LLM API.
+
     Args:
         doc_id (UUID): The primary key ID of the document in the database.
         file_path (str): The local system path to the PDF document.
         db_session (AsyncSession): The active SQLAlchemy async session.
     """
+    semaphore = _get_extraction_semaphore()
+    async with semaphore:
+        await _run_document_pipeline(doc_id, file_path, db_session)
+
+
+async def _run_document_pipeline(doc_id: UUID, file_path: str, db_session: AsyncSession) -> None:
+    """Core extraction pipeline. Runs only while holding the concurrency slot."""
     logger.info(f"Initiating pipeline for document {doc_id}.")
 
     # 1. Update the document status in the database to 'processing'
@@ -117,6 +168,9 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
         from models.database import DocumentType, ExtractedResume
         
         if document.document_type == DocumentType.contract:
+            fields = ("party_name", "contract_value", "payment_terms_days",
+                      "penalty_clause_exists", "governing_law")
+            confidence, source_quotes = _collect_confidence(structured_data, fields)
             # Instantiate the ExtractedData ORM model using the validated Pydantic properties
             extracted_record = ExtractedData(
                 document_id=doc_id,
@@ -126,9 +180,14 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
                 penalty_clause_exists=structured_data.penalty_clause_exists,
                 governing_law=structured_data.governing_law,
                 needs_review=structured_data.needs_review,
-                extracted_text=extracted_text
+                extracted_text=extracted_text,
+                confidence=confidence,
+                source_quotes=source_quotes,
             )
         elif document.document_type == DocumentType.resume:
+            fields = ("candidate_name", "years_of_experience", "education_level",
+                      "skills", "previous_companies")
+            confidence, source_quotes = _collect_confidence(structured_data, fields)
             extracted_record = ExtractedResume(
                 document_id=doc_id,
                 candidate_name=structured_data.candidate_name,
@@ -137,7 +196,9 @@ async def process_document_pipeline(doc_id: UUID, file_path: str, db_session: As
                 skills=structured_data.skills,
                 previous_companies=structured_data.previous_companies,
                 needs_review=structured_data.needs_review,
-                extracted_text=extracted_text
+                extracted_text=extracted_text,
+                confidence=confidence,
+                source_quotes=source_quotes,
             )
         else:
             raise ValueError(f"Unknown document_type {document.document_type}")

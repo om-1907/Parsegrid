@@ -97,6 +97,11 @@ class ExtractedData(Base):
     governing_law: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Per-field extraction confidence (field -> 0..1) and verbatim source quotes
+    # (field -> sentence). Stored as JSON so the UI can render confidence bars and
+    # citations without extra columns per field.
+    confidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source_quotes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -138,6 +143,9 @@ class ExtractedResume(Base):
     previous_companies: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Per-field extraction confidence (field -> 0..1) and verbatim source quotes.
+    confidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source_quotes: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -238,12 +246,18 @@ async_engine = create_async_engine(
     connect_args=connect_args,
     # ── Production Connection Pool Configuration ──────────────────────────
     # pool_size: Baseline persistent connections held open to Supabase.
-    # max_overflow: Extra connections allowed during traffic spikes (total = pool_size + max_overflow = 30).
+    # max_overflow: Extra connections allowed during traffic spikes.
+    # CRITICAL: pool_size + max_overflow MUST stay under the Supabase pooler's
+    #   client limit (session mode caps at 15 on the default plan). Exceeding it
+    #   makes the pooler reject new connections with "EMAXCONNSESSION max clients
+    #   reached", which strands documents in 'pending'/'failed' under batch load.
+    #   Both values are env-tunable (DB_POOL_SIZE / DB_MAX_OVERFLOW) so they can be
+    #   raised if you move to transaction mode or a larger plan.
     # pool_timeout: Seconds to wait for a free connection before raising an error.
     # pool_pre_ping: Liveness check; transparently reconnects stale connections.
     # pool_recycle: Proactively retire connections older than 5 min (Supavisor compat).
-    pool_size=10,
-    max_overflow=20,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
     pool_timeout=30,
     pool_pre_ping=True,
     pool_recycle=300,

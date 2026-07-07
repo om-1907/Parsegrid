@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import uuid
 import zipfile
@@ -22,6 +23,8 @@ from services.audit import write_audit_entry
 from services.rag_engine import secure_global_search
 from middleware.rate_limiter import limiter
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1", tags=["Documents"])
 
 STORAGE_DIR = "./storage"
@@ -30,6 +33,12 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 # Maximum accepted upload size (25 MB) to protect the server from OOM.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
+# ZIP-bomb defenses: cap how many inner files we extract and the total
+# uncompressed bytes we will read out of a single archive. Without these, a
+# small malicious .zip can decompress to gigabytes and OOM the server.
+MAX_ZIP_ENTRIES = 200
+MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
@@ -37,6 +46,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     async with AsyncSessionLocal() as session:
         yield session
+
+
+def _write_file(file_path: str, data: bytes) -> None:
+    """Synchronous disk write, intended to be run via asyncio.to_thread."""
+    with open(file_path, "wb") as f:
+        f.write(data)
 
 
 async def background_process_document(doc_id: uuid.UUID, file_path: str):
@@ -77,6 +92,13 @@ class ExtractedDataResponse(BaseModel):
     needs_review: bool
     filename: Optional[str] = None
     upload_time: Optional[datetime] = None
+    # Per-field confidence map (field -> 0..1) + flattened source quotes the UI renders.
+    confidence: dict = Field(default_factory=dict)
+    party_name_source_quote: Optional[str] = None
+    contract_value_source_quote: Optional[str] = None
+    payment_terms_days_source_quote: Optional[str] = None
+    penalty_clause_exists_source_quote: Optional[str] = None
+    governing_law_source_quote: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -100,6 +122,12 @@ class ExtractedResumeResponse(BaseModel):
     needs_review: bool
     filename: Optional[str] = None
     upload_time: Optional[datetime] = None
+    confidence: dict = Field(default_factory=dict)
+    candidate_name_source_quote: Optional[str] = None
+    years_of_experience_source_quote: Optional[str] = None
+    education_level_source_quote: Optional[str] = None
+    skills_source_quote: Optional[str] = None
+    previous_companies_source_quote: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -118,6 +146,23 @@ class ExtractedResumeUpdateRequest(BaseModel):
 import time as _time
 _status_cache: dict[str, tuple[float, dict]] = {}  # key → (expiry_ts, payload)
 _STATUS_CACHE_TTL = 3  # seconds
+_STATUS_CACHE_MAX = 10_000  # hard cap so the cache can't grow unbounded
+
+
+def _status_cache_set(key: str, payload: dict) -> None:
+    """Store a status payload, evicting expired entries and capping total size
+    so many distinct documents can't leak memory in a long-running process."""
+    now = _time.time()
+    if len(_status_cache) >= _STATUS_CACHE_MAX:
+        expired = [k for k, (exp, _) in _status_cache.items() if exp <= now]
+        for k in expired:
+            _status_cache.pop(k, None)
+        # Still full of live entries → drop the oldest to make room.
+        if len(_status_cache) >= _STATUS_CACHE_MAX:
+            oldest = sorted(_status_cache.items(), key=lambda kv: kv[1][0])[: _STATUS_CACHE_MAX // 10]
+            for k, _ in oldest:
+                _status_cache.pop(k, None)
+    _status_cache[key] = (now + _STATUS_CACHE_TTL, payload)
 
 
 # --- Endpoints ---
@@ -164,7 +209,9 @@ async def upload_document(
     async def _ingest(file_bytes: bytes, original_filename: str, ext: str) -> str:
         """Save + queue a single document. Returns 'queued' or 'skipped'."""
         nonlocal skipped
-        file_hash = generate_file_hash(file_bytes)
+        # SHA-256 over up to 25 MB is CPU-bound; run it off the event loop so a
+        # large batch doesn't freeze the server for every other request.
+        file_hash = await asyncio.to_thread(generate_file_hash, file_bytes)
 
         # Duplicate within this same batch?
         if file_hash in seen_hashes:
@@ -180,8 +227,8 @@ async def upload_document(
         seen_hashes.add(file_hash)
         doc_id = uuid.uuid4()
         file_path = os.path.join(STORAGE_DIR, f"{doc_id}{ext}")
-        with open(file_path, "wb") as f:
-            f.write(file_bytes)
+        # Blocking disk write also moved off the event loop.
+        await asyncio.to_thread(_write_file, file_path, file_bytes)
 
         db.add(Document(
             id=doc_id,
@@ -215,6 +262,8 @@ async def upload_document(
 
         if ext == ".zip":
             try:
+                entries_processed = 0
+                total_uncompressed = 0
                 with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
                     for zip_info in z.infolist():
                         if zip_info.is_dir():
@@ -226,23 +275,40 @@ async def upload_document(
                         if z_ext not in INNER_ALLOWED_EXTENSIONS:
                             continue
 
+                        # ── ZIP-bomb guards (check BEFORE decompressing) ──
+                        if entries_processed >= MAX_ZIP_ENTRIES:
+                            errors.append(f"{upload.filename}: archive has more than {MAX_ZIP_ENTRIES} files; the rest were skipped.")
+                            break
+                        # zip_info.file_size is the declared uncompressed size from
+                        # the header — reject oversized/bomb entries without reading them.
+                        if zip_info.file_size > MAX_UPLOAD_BYTES:
+                            errors.append(f"{zip_info.filename}: exceeds the size limit.")
+                            continue
+                        if total_uncompressed + zip_info.file_size > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
+                            errors.append(f"{upload.filename}: total uncompressed size exceeds the {MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES // (1024*1024)} MB limit; remaining files skipped.")
+                            break
+                        entries_processed += 1
+
                         z_bytes = z.read(zip_info.filename)
                         if not z_bytes:
                             continue
+                        # Defensive: a lying header could still under-report size.
                         if len(z_bytes) > MAX_UPLOAD_BYTES:
                             errors.append(f"{zip_info.filename}: exceeds the size limit.")
                             continue
+                        total_uncompressed += len(z_bytes)
                         try:
                             await _ingest(z_bytes, os.path.basename(zip_info.filename), z_ext)
                         except Exception as e:
-                            errors.append(f"{zip_info.filename}: {e}")
+                            errors.append(f"{zip_info.filename}: could not be processed.")
             except zipfile.BadZipFile:
                 errors.append(f"{upload.filename}: invalid ZIP archive.")
         else:
             try:
                 await _ingest(file_bytes, upload.filename, ext)
             except Exception as e:
-                errors.append(f"{upload.filename}: {e}")
+                logger.warning("Ingest failed for %s: %s", upload.filename, e)
+                errors.append(f"{upload.filename}: could not be processed.")
 
     await db.commit()
 
@@ -301,7 +367,8 @@ async def get_document_file(
             html_content = f"<html><head><style>body {{ font-family: monospace; white-space: pre-wrap; padding: 20px; }}</style></head><body>{safe_text}</body></html>"
             return HTMLResponse(content=html_content)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Could not generate preview: {e}")
+            logger.warning("Preview generation failed for %s: %s", doc_id, e)
+            raise HTTPException(status_code=500, detail="Could not generate document preview.")
 
 
 @router.get("/status/{doc_id}", response_model=DocumentStatusResponse)
@@ -329,7 +396,7 @@ async def get_document_status(
     payload = {"id": str(doc.id), "status": doc.status}
 
     # Cache the result for future polls.
-    _status_cache[cache_key] = (_time.time() + _STATUS_CACHE_TTL, payload)
+    _status_cache_set(cache_key, payload)
 
     return DocumentStatusResponse(id=doc.id, status=doc.status)
 
@@ -340,34 +407,46 @@ async def query_extracted_data(
     max_payment_days: Optional[int] = None,
     requires_review: Optional[bool] = None,
     governing_law: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Constructs a highly optimized async SQLAlchemy query filtering records out of the 
+    Constructs a highly optimized async SQLAlchemy query filtering records out of the
     extracted_data table based on parameters passed by the client.
+
+    Paginated (``limit``/``offset``) so a tenant with thousands of documents can't
+    force the server to serialize its entire table in one response. The frontend
+    currently does client-side search/stats over this page; adopt server-side
+    pagination there once a tenant exceeds a few hundred documents.
     """
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     stmt = select(ExtractedData, Document).join(Document, ExtractedData.document_id == Document.id).where(Document.user_id == current_user.id)
-    
+
     # Dynamically build the filtering clauses
     if min_value is not None:
         stmt = stmt.where(ExtractedData.contract_value >= min_value)
-    
+
     if max_payment_days is not None:
         stmt = stmt.where(ExtractedData.payment_terms_days <= max_payment_days)
-        
+
     if requires_review is not None:
         stmt = stmt.where(ExtractedData.needs_review == requires_review)
 
     if governing_law is not None:
         stmt = stmt.where(ExtractedData.governing_law == governing_law)
-        
+
+    stmt = stmt.order_by(Document.upload_time.desc()).limit(limit).offset(offset)
+
     # Execute the compound query
     result = await db.execute(stmt)
     rows = result.all()
     
     response = []
     for extracted, document in rows:
+        quotes = extracted.source_quotes or {}
         response.append(ExtractedDataResponse(
             id=extracted.id,
             document_id=extracted.document_id,
@@ -378,9 +457,15 @@ async def query_extracted_data(
             governing_law=extracted.governing_law,
             needs_review=extracted.needs_review,
             filename=document.filename,
-            upload_time=document.upload_time
+            upload_time=document.upload_time,
+            confidence=extracted.confidence or {},
+            party_name_source_quote=quotes.get("party_name"),
+            contract_value_source_quote=quotes.get("contract_value"),
+            payment_terms_days_source_quote=quotes.get("payment_terms_days"),
+            penalty_clause_exists_source_quote=quotes.get("penalty_clause_exists"),
+            governing_law_source_quote=quotes.get("governing_law"),
         ))
-    
+
     return response
 
 
@@ -466,6 +551,7 @@ async def query_extracted_resumes(
     
     response = []
     for extracted, document in rows:
+        quotes = extracted.source_quotes or {}
         response.append(ExtractedResumeResponse(
             id=extracted.id,
             document_id=extracted.document_id,
@@ -476,9 +562,15 @@ async def query_extracted_resumes(
             previous_companies=extracted.previous_companies,
             needs_review=extracted.needs_review,
             filename=document.filename,
-            upload_time=document.upload_time
+            upload_time=document.upload_time,
+            confidence=extracted.confidence or {},
+            candidate_name_source_quote=quotes.get("candidate_name"),
+            years_of_experience_source_quote=quotes.get("years_of_experience"),
+            education_level_source_quote=quotes.get("education_level"),
+            skills_source_quote=quotes.get("skills"),
+            previous_companies_source_quote=quotes.get("previous_companies"),
         ))
-    
+
     return response
 
 
@@ -551,5 +643,6 @@ async def global_search(
         response = await secure_global_search(body.query, current_user.id, db, document_type=scope)
         return response
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {e}")
+        logger.error("Global search failed for user %s: %s", current_user.id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Search failed. Please try again.")
 
