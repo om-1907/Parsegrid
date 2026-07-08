@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowRight, ShieldCheck, Mail, KeyRound, Loader2, Gauge, Bot } from "lucide-react";
+import { ArrowRight, Mail, KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,6 +26,17 @@ function normalizeDetail(detail: unknown, fallback: string): string {
       .join(", ");
   }
   return JSON.stringify(detail);
+}
+
+const PASSWORD_REQUIREMENT_MESSAGE =
+  "Password must be at least 8 characters long, contain at least 1 digit, and contain at least 1 special character.";
+
+function validatePasswordComplexity(value: string): string {
+  const hasMinLength = value.length >= 8;
+  const hasDigit = /\d/.test(value);
+  const hasSpecial = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(value);
+
+  return hasMinLength && hasDigit && hasSpecial ? "" : PASSWORD_REQUIREMENT_MESSAGE;
 }
 
 export default function LoginPage() {
@@ -64,6 +75,13 @@ export default function LoginPage() {
           toast.error(msg);
         }
       } else {
+        const passwordError = validatePasswordComplexity(password);
+        if (passwordError) {
+          setError(passwordError);
+          toast.error(passwordError);
+          return;
+        }
+
         const res = await fetch(apiUrl("/api/v1/auth/register"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -165,6 +183,11 @@ export default function LoginPage() {
                   className="h-11 border-white/15 bg-white/10 pl-10 text-white placeholder:text-white/40 backdrop-blur focus-visible:border-white/40 focus-visible:ring-white/30"
                 />
               </div>
+              {!isLogin && (
+                <p className="text-xs leading-5 text-white/60">
+                  Use at least 8 characters with 1 number and 1 special character.
+                </p>
+              )}
             </div>
 
             {error && (

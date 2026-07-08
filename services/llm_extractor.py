@@ -129,6 +129,8 @@ async def run_structured_extraction(text: str, document_type: DocumentType):
             "You are an expert contract analyst. Extract the requested fields from the contract text. "
             "You must also output a confidence score between 0.0 and 1.0 for each extracted field based on "
             "how explicitly it was stated in the text. "
+            "For contract value, return the numeric amount exactly as stated in the document and "
+            "return contract_currency as a 3-letter ISO 4217 code. If no currency is stated, use INR. "
             "CRITICAL: For every field, you MUST extract the exact verbatim sentence from the contract "
             "text into the corresponding `_source_quote` field to serve as a citation. "
             + cross_lingual_prompt

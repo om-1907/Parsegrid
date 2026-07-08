@@ -1,6 +1,6 @@
 from typing import Optional, List, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ExtractedContract(BaseModel):
@@ -29,7 +29,7 @@ class ExtractedContract(BaseModel):
         default=None,
         ge=0.0,
         le=1e15,
-        description="The total monetary value of the contract."
+        description="The total monetary value of the contract in its original stated currency."
     )
     contract_value_confidence: float = Field(
         default=1.0, 
@@ -42,6 +42,33 @@ class ExtractedContract(BaseModel):
         max_length=2000,
         description="The exact verbatim sentence from the contract text that contains the contract value."
     )
+
+    contract_currency: Optional[str] = Field(
+        default="INR",
+        max_length=3,
+        description="ISO 4217 currency code for contract_value, e.g. INR, USD, EUR, GBP."
+    )
+
+    @field_validator("contract_currency", mode="before")
+    @classmethod
+    def normalize_contract_currency(cls, value: object) -> str:
+        if value is None:
+            return "INR"
+        code = str(value).strip().upper()
+        aliases = {
+            "₹": "INR",
+            "RS": "INR",
+            "RS.": "INR",
+            "RUPEE": "INR",
+            "RUPEES": "INR",
+            "$": "USD",
+            "US$": "USD",
+            "DOLLAR": "USD",
+            "DOLLARS": "USD",
+            "€": "EUR",
+            "£": "GBP",
+        }
+        return aliases.get(code, code[:3] if len(code) >= 3 else "INR")
     
     payment_terms_days: Optional[int] = Field(
         default=None,

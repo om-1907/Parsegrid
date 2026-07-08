@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Loader2, AlertCircle, FileText, Calendar } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { apiUrl } from "@/lib/api";
-import { type ExtractedData, type ConfidenceMap, confidenceTier } from "@/lib/contracts";
+import { formatCurrencyFull, type ExtractedData, type ConfidenceMap, confidenceTier } from "@/lib/contracts";
 import DOMPurify from "dompurify";
 
 interface ReviewDrawerProps {
@@ -78,6 +78,7 @@ export default function ReviewDrawer({ isOpen, onClose, data, onSaved }: ReviewD
       setFormData({
         party_name: data.party_name || "",
         contract_value: data.contract_value || 0,
+        contract_currency: "INR",
         payment_terms_days: data.payment_terms_days || 0,
         penalty_clause_exists: data.penalty_clause_exists || false,
         governing_law: data.governing_law || "",
@@ -197,8 +198,13 @@ export default function ReviewDrawer({ isOpen, onClose, data, onSaved }: ReviewD
                 </div>
 
                 <div className="space-y-2">
-                  <FieldLabel htmlFor="contract_value" confidence={conf("contract_value")} sourceQuote={data?.contract_value_source_quote}>Contract value ($)</FieldLabel>
+                  <FieldLabel htmlFor="contract_value" confidence={conf("contract_value")} sourceQuote={data?.contract_value_source_quote}>Contract value (INR)</FieldLabel>
                   <Input id="contract_value" type="number" name="contract_value" value={formData.contract_value as number} onChange={handleChange} disabled={isReadOnly} className="disabled:opacity-80" />
+                  {data?.contract_currency && data.contract_currency !== "INR" && data.contract_value_original ? (
+                    <p className="text-xs text-muted-foreground">
+                      Original: {data.contract_currency} {data.contract_value_original.toLocaleString()} converted to {formatCurrencyFull(data.contract_value ?? 0)}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="space-y-2">

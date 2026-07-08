@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
-import { type ExtractedData, confidenceTier } from "@/lib/contracts";
+import { companyKey, companyLabel, formatCurrencyFull, type ExtractedData, confidenceTier } from "@/lib/contracts";
 
 export type { ExtractedData } from "@/lib/contracts";
 
@@ -24,6 +24,7 @@ interface ExtractedDataTableProps {
 
 type SortField = keyof ExtractedData;
 type SortOrder = "asc" | "desc";
+type GroupedContracts = { key: string; label: string; rows: ExtractedData[]; totalValue: number };
 
 /** Lowest available field confidence for a row, or null if none present. */
 function rowConfidence(row: ExtractedData): number | null {
@@ -106,6 +107,26 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
     });
   }, [data, search, sortField, sortOrder]);
 
+  const groupedData = useMemo<GroupedContracts[]>(() => {
+    const groups = new Map<string, GroupedContracts>();
+    for (const row of visibleData) {
+      const key = companyKey(row.party_name);
+      const group = groups.get(key);
+      if (group) {
+        group.rows.push(row);
+        group.totalValue += row.contract_value ?? 0;
+      } else {
+        groups.set(key, {
+          key,
+          label: companyLabel(row.party_name),
+          rows: [row],
+          totalValue: row.contract_value ?? 0,
+        });
+      }
+    }
+    return Array.from(groups.values());
+  }, [visibleData]);
+
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return null;
     return sortOrder === "asc" ? (
@@ -149,7 +170,7 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
             </div>
           </div>
           <div className="w-32 space-y-1.5">
-            <Label htmlFor="min-value">Min value ($)</Label>
+            <Label htmlFor="min-value">Min value (INR)</Label>
             <Input
               id="min-value"
               type="number"
@@ -194,6 +215,35 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
           <div className="flex items-center gap-2 bg-destructive/10 p-4 text-destructive">
             <AlertCircle className="h-5 w-5" />
             <p>{error}</p>
+          </div>
+        )}
+
+        {!loading && groupedData.length > 0 && (
+          <div className="border-b border-white/10 bg-white/[0.02] p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-foreground">Grouped by company</p>
+              <p className="text-xs text-muted-foreground">{groupedData.length} compan{groupedData.length === 1 ? "y" : "ies"}</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {groupedData.map((group) => (
+                <button
+                  key={group.key}
+                  type="button"
+                  className="flex min-h-16 items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-left transition-colors hover:bg-white/[0.08]"
+                  onClick={() => group.rows[0] && onRowSelect?.(group.rows[0])}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-foreground">{group.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {group.rows.length} contract{group.rows.length === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-semibold text-emerald-400">
+                    {formatCurrencyFull(group.totalValue)}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -257,7 +307,16 @@ export default function ExtractedDataTable({ onRowSelect, refreshTrigger = 0, on
                         {row.party_name || <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
                       <TableCell>
-                        {row.contract_value ? `$${row.contract_value.toLocaleString()}` : <span className="text-muted-foreground/50">—</span>}
+                        {row.contract_value ? (
+                          <div className="space-y-0.5">
+                            <div className="font-medium">{formatCurrencyFull(row.contract_value)}</div>
+                            {row.contract_currency && row.contract_currency !== "INR" && row.contract_value_original ? (
+                              <div className="text-xs text-muted-foreground">
+                                {row.contract_currency} {row.contract_value_original.toLocaleString()}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : <span className="text-muted-foreground/50">—</span>}
                       </TableCell>
                       <TableCell>
                         {row.payment_terms_days ?? <span className="text-muted-foreground/50">—</span>}

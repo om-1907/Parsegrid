@@ -1,6 +1,6 @@
 "use client";
 
-import { FileStack, AlertTriangle, DollarSign, CalendarClock } from "lucide-react";
+import { FileStack, AlertTriangle, IndianRupee, CalendarClock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type ExtractedData, computeStats, formatCurrency } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,7 @@ export function StatsOverview({ data, loading }: StatsOverviewProps) {
   const cards = [
     { label: "Total contracts", value: stats.total.toLocaleString(), icon: FileStack, tint: "text-indigo-500 bg-indigo-500/10" },
     { label: "Needs review", value: stats.needsReview.toLocaleString(), icon: AlertTriangle, tint: "text-amber-500 bg-amber-500/10" },
-    { label: "Total value", value: formatCurrency(stats.totalValue), icon: DollarSign, tint: "text-emerald-500 bg-emerald-500/10" },
+    { label: "Total value (INR)", value: formatCurrency(stats.totalValue), icon: IndianRupee, tint: "text-emerald-500 bg-emerald-500/10" },
     { label: "Avg. payment terms", value: stats.avgTerms !== null ? `${Math.round(stats.avgTerms)}d` : "—", icon: CalendarClock, tint: "text-cyan-500 bg-cyan-500/10" },
   ];
 
@@ -62,10 +62,10 @@ type Bar = { label: string; value: number };
 
 function valueBuckets(rows: ExtractedData[]): Bar[] {
   const buckets = [
-    { label: "< $10K", test: (v: number) => v < 10_000 },
-    { label: "$10K–100K", test: (v: number) => v >= 10_000 && v < 100_000 },
-    { label: "$100K–1M", test: (v: number) => v >= 100_000 && v < 1_000_000 },
-    { label: "$1M+", test: (v: number) => v >= 1_000_000 },
+    { label: "< ₹1L", test: (v: number) => v < 100_000 },
+    { label: "₹1L-10L", test: (v: number) => v >= 100_000 && v < 1_000_000 },
+    { label: "₹10L-1Cr", test: (v: number) => v >= 1_000_000 && v < 10_000_000 },
+    { label: "₹1Cr+", test: (v: number) => v >= 10_000_000 },
   ];
   return buckets.map((b) => ({
     label: b.label,

@@ -92,6 +92,10 @@ class ExtractedData(Base):
     )
     party_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     contract_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    contract_value_original: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    contract_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
+    exchange_rate_to_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    exchange_rate_date: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     payment_terms_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     penalty_clause_exists: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     governing_law: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -125,6 +129,7 @@ class ExtractedData(Base):
         Index("ix_extracted_data_needs_review", "needs_review"),
         Index("ix_extracted_data_governing_law", "governing_law"),
         Index("ix_extracted_data_contract_value", "contract_value"),
+        Index("ix_extracted_data_party_name", "party_name"),
     )
 
 

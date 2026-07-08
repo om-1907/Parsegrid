@@ -21,6 +21,7 @@ from services.pdf_reader import generate_file_hash
 from services.worker import process_document_pipeline
 from services.audit import write_audit_entry
 from services.rag_engine import secure_global_search
+from services.currency import convert_to_inr, normalize_currency_code
 from middleware.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,10 @@ class ExtractedDataResponse(BaseModel):
     document_id: uuid.UUID
     party_name: Optional[str] = None
     contract_value: Optional[float] = None
+    contract_value_original: Optional[float] = None
+    contract_currency: str = "INR"
+    exchange_rate_to_inr: Optional[float] = None
+    exchange_rate_date: Optional[str] = None
     payment_terms_days: Optional[int] = None
     penalty_clause_exists: Optional[bool] = None
     governing_law: Optional[str] = None
@@ -106,6 +111,7 @@ class ExtractedDataResponse(BaseModel):
 class ExtractedDataUpdateRequest(BaseModel):
     party_name: Optional[str] = Field(default=None, max_length=500)
     contract_value: Optional[float] = Field(default=None, ge=0.0, le=1e15)
+    contract_currency: Optional[str] = Field(default="INR", min_length=3, max_length=3)
     payment_terms_days: Optional[int] = Field(default=None, ge=0, le=3650)
     penalty_clause_exists: Optional[bool] = None
     governing_law: Optional[str] = Field(default=None, max_length=200)
@@ -452,6 +458,10 @@ async def query_extracted_data(
             document_id=extracted.document_id,
             party_name=extracted.party_name,
             contract_value=extracted.contract_value,
+            contract_value_original=extracted.contract_value_original,
+            contract_currency=extracted.contract_currency or "INR",
+            exchange_rate_to_inr=extracted.exchange_rate_to_inr,
+            exchange_rate_date=extracted.exchange_rate_date,
             payment_terms_days=extracted.payment_terms_days,
             penalty_clause_exists=extracted.penalty_clause_exists,
             governing_law=extracted.governing_law,
@@ -492,14 +502,29 @@ async def resolve_manual_review(
     old_state = {
         "party_name": record.party_name,
         "contract_value": record.contract_value,
+        "contract_value_original": record.contract_value_original,
+        "contract_currency": record.contract_currency,
+        "exchange_rate_to_inr": record.exchange_rate_to_inr,
+        "exchange_rate_date": record.exchange_rate_date,
         "payment_terms_days": record.payment_terms_days,
         "penalty_clause_exists": record.penalty_clause_exists,
         "governing_law": record.governing_law,
     }
     
-    # Apply precise dictionary updates
     updates = update_data.model_dump(exclude_unset=True, exclude={"operator_id"})
+    if "contract_value" in updates or "contract_currency" in updates:
+        original_value = updates.get("contract_value", record.contract_value_original or record.contract_value)
+        original_currency = normalize_currency_code(updates.get("contract_currency", record.contract_currency))
+        conversion = await convert_to_inr(original_value, original_currency)
+        record.contract_value_original = original_value
+        record.contract_currency = conversion.currency if conversion else original_currency
+        record.contract_value = conversion.amount_inr if conversion else original_value
+        record.exchange_rate_to_inr = conversion.rate_to_inr if conversion else None
+        record.exchange_rate_date = conversion.rate_date if conversion else None
+
     for key, value in updates.items():
+        if key in {"contract_value", "contract_currency"}:
+            continue
         setattr(record, key, value)
         
     # Flip the review flag

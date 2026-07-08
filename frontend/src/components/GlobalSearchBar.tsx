@@ -50,8 +50,8 @@ export default function GlobalSearchBar({ documentType }: GlobalSearchBarProps) 
         body: JSON.stringify({ query: query.trim(), document_type: documentType }),
       });
       setResult(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to execute search.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to execute search.");
     } finally {
       setIsLoading(false);
     }
@@ -59,19 +59,21 @@ export default function GlobalSearchBar({ documentType }: GlobalSearchBarProps) 
 
   return (
     <div className="w-full mx-auto mb-8">
-      <form onSubmit={handleSearch} className="relative flex items-center">
-        <Search className="absolute left-4 w-5 h-5 text-muted-foreground" />
-        <input
-          type="text"
-          className="w-full pl-12 pr-4 py-3 bg-white/[0.06] border border-white/10 backdrop-blur-xl rounded-xl text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-all shadow-xl shadow-black/20"
-          placeholder={placeholder}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+      <form onSubmit={handleSearch} className="flex flex-col gap-3 sm:relative sm:flex-row sm:items-center">
+        <div className="relative w-full">
+          <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            className="h-12 w-full rounded-xl border border-white/10 bg-white/[0.06] py-3 pl-12 pr-4 text-foreground shadow-xl shadow-black/20 backdrop-blur-xl transition-all placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary sm:pr-28"
+            placeholder={placeholder}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
         <button
           type="submit"
           disabled={isLoading || !query.trim()}
-          className="absolute right-2 px-4 py-1.5 bg-primary text-primary-foreground font-medium rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          className="flex h-11 w-full items-center justify-center rounded-lg bg-primary px-4 py-1.5 font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 sm:absolute sm:right-2 sm:top-1/2 sm:h-auto sm:w-auto sm:-translate-y-1/2"
         >
           {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Search"}
         </button>
@@ -86,7 +88,7 @@ export default function GlobalSearchBar({ documentType }: GlobalSearchBarProps) 
       {result && (
         <div className="mt-6 p-6 bg-white/[0.06] border border-white/10 backdrop-blur-xl rounded-xl shadow-xl shadow-black/20 space-y-4 animate-in fade-in slide-in-from-top-4">
           <h3 className="font-semibold text-lg flex items-center gap-2">
-            ✨ AI Analysis
+            AI Analysis
           </h3>
           {/* The LLM answer is plain text; render it as text (whitespace preserved) rather
               than injecting it as HTML. */}

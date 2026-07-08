@@ -167,6 +167,14 @@ def require_role(allowed_roles: list[str]):
 @router.post("/register", response_model=UserResponse)
 @limiter.limit("5/minute")
 async def register(request: Request, user: UserCreate, db: AsyncSession = Depends(get_db)):
+    try:
+        validate_password_complexity(user.password)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+
     result = await db.execute(select(User).where(User.email == user.email))
     db_user = result.scalars().first()
     if db_user:

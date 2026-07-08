@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, AlertCircle, FileText } from "lucide-react";
+import { Loader2, AlertCircle, FileText, Calendar } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 import { type ExtractedResume, type ResumeConfidenceMap } from "@/lib/resumes";
 import { confidenceTier } from "@/lib/contracts";
@@ -132,8 +132,8 @@ export default function ReviewResumeDrawer({ isOpen, onClose, data, onSaved }: R
       toast.success("Resume data updated and verified.");
       onSaved();
       onClose();
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
     } finally {
       setIsSaving(false);
     }
@@ -141,20 +141,45 @@ export default function ReviewResumeDrawer({ isOpen, onClose, data, onSaved }: R
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-[550px] max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden">
-        <DialogHeader className="p-6 pb-4 border-b">
-          <DialogTitle className="flex items-center gap-2 text-xl font-display">
-            <FileText className="h-5 w-5 text-primary" />
-            Review Extracted Resume
-          </DialogTitle>
-          <DialogDescription>
-            {data?.needs_review
-              ? "Review the low-confidence fields highlighted below. Original quotes from the resume are provided where possible."
-              : "Make corrections to the parsed metadata."}
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="flex h-[90vh] max-h-[90vh] w-full max-w-6xl flex-col gap-0 overflow-hidden p-0">
+        <div className="flex h-full flex-col md:flex-row">
+          <div className="flex h-full w-full flex-col overflow-y-auto border-r border-border bg-card md:w-1/3">
+            <DialogHeader className="border-b p-6 pb-4 text-left">
+              <DialogTitle className="flex items-center gap-2 text-xl font-display">
+                <FileText className="h-5 w-5 text-primary" />
+                Review Extracted Resume
+              </DialogTitle>
+              <DialogDescription>
+                {data?.needs_review
+                  ? "Review the low-confidence fields highlighted below. Original quotes from the resume are provided where possible."
+                  : "Make corrections to the parsed metadata."}
+              </DialogDescription>
+            </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
+            {data && (
+              <div className="m-6 mb-0 space-y-3 rounded-lg border border-border bg-muted/40 p-4">
+                <div className="flex items-start gap-2 text-sm">
+                  <FileText className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                  <div className="w-full overflow-hidden">
+                    <p className="mb-0.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">Filename</p>
+                    <p className="truncate font-medium text-foreground" title={data.filename || "Unknown"}>
+                      {data.filename || "Unknown"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2 text-sm">
+                  <Calendar className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                  <div className="w-full overflow-hidden">
+                    <p className="mb-0.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">Uploaded</p>
+                    <p className="truncate font-medium text-foreground">
+                      {data.upload_time ? new Date(data.upload_time).toLocaleString() : "Unknown"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
           <div className="p-6 space-y-6">
             {error && (
               <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
@@ -233,23 +258,44 @@ export default function ReviewResumeDrawer({ isOpen, onClose, data, onSaved }: R
               </div>
             </div>
           </div>
-        </form>
+            </form>
 
-        <DialogFooter className="p-6 border-t bg-muted/20">
-          <Button type="button" variant="outline" onClick={onClose} disabled={isSaving}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={isSaving} className="min-w-[120px]">
-            {isSaving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              "Save & Verify"
-            )}
-          </Button>
-        </DialogFooter>
+            <DialogFooter className="border-t bg-muted/20 p-6">
+              <Button type="button" variant="outline" onClick={onClose} disabled={isSaving}>
+                Cancel
+              </Button>
+              <Button onClick={handleSubmit} disabled={isSaving} className="min-w-[120px]">
+                {isSaving ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save & Verify"
+                )}
+              </Button>
+            </DialogFooter>
+          </div>
+
+          <div className="flex h-full w-full flex-col border-l border-border bg-muted/40 md:w-2/3">
+            <div className="z-10 flex shrink-0 items-center border-b border-border bg-card px-4 py-3 shadow-sm">
+              <span className="text-sm font-semibold text-foreground">Resume preview</span>
+            </div>
+            <div className="relative flex-1 overflow-hidden bg-background">
+              {data?.document_id ? (
+                <iframe
+                  src={apiUrl(`/api/v1/documents/${data.document_id}/file`)}
+                  className="absolute inset-0 h-full w-full border-0 bg-white"
+                  title="Resume Preview"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-muted-foreground">
+                  <p>No resume selected</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );

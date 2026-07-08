@@ -14,6 +14,7 @@ from services.llm_extractor import (
     run_structured_extraction,
 )
 from services.document_reader import DocumentReaderError, extract_document_text
+from services.currency import convert_to_inr
 
 # Configure a module-level logger
 logger = logging.getLogger(__name__)
@@ -171,11 +172,19 @@ async def _run_document_pipeline(doc_id: UUID, file_path: str, db_session: Async
             fields = ("party_name", "contract_value", "payment_terms_days",
                       "penalty_clause_exists", "governing_law")
             confidence, source_quotes = _collect_confidence(structured_data, fields)
+            conversion = await convert_to_inr(
+                structured_data.contract_value,
+                getattr(structured_data, "contract_currency", None),
+            )
             # Instantiate the ExtractedData ORM model using the validated Pydantic properties
             extracted_record = ExtractedData(
                 document_id=doc_id,
                 party_name=structured_data.party_name,
-                contract_value=structured_data.contract_value,
+                contract_value=conversion.amount_inr if conversion else structured_data.contract_value,
+                contract_value_original=structured_data.contract_value,
+                contract_currency=conversion.currency if conversion else "INR",
+                exchange_rate_to_inr=conversion.rate_to_inr if conversion else None,
+                exchange_rate_date=conversion.rate_date if conversion else None,
                 payment_terms_days=structured_data.payment_terms_days,
                 penalty_clause_exists=structured_data.penalty_clause_exists,
                 governing_law=structured_data.governing_law,

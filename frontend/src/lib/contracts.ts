@@ -15,6 +15,10 @@ export interface ExtractedData {
   party_name: string | null;
   party_name_source_quote?: string | null;
   contract_value: number | null;
+  contract_value_original?: number | null;
+  contract_currency?: string | null;
+  exchange_rate_to_inr?: number | null;
+  exchange_rate_date?: string | null;
   contract_value_source_quote?: string | null;
   payment_terms_days: number | null;
   payment_terms_days_source_quote?: string | null;
@@ -57,11 +61,26 @@ export function computeStats(rows: ExtractedData[]): ContractStats {
   };
 }
 
-/** Compact currency formatting: $1.25M, $980K, $1,200. */
+/** Compact INR formatting: ₹1.25Cr, ₹9.8L, ₹1,200. */
 export function formatCurrency(value: number): string {
-  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 10_000) return `$${(value / 1_000).toFixed(0)}K`;
-  return `$${value.toLocaleString()}`;
+  const abs = Math.abs(value);
+  const prefix = value < 0 ? "-₹" : "₹";
+  if (abs >= 10_000_000) return `${prefix}${(abs / 10_000_000).toFixed(2)}Cr`;
+  if (abs >= 100_000) return `${prefix}${(abs / 100_000).toFixed(2)}L`;
+  return `${prefix}${abs.toLocaleString("en-IN")}`;
+}
+
+export function formatCurrencyFull(value: number): string {
+  return `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+}
+
+export function companyKey(name: string | null | undefined): string {
+  const trimmed = name?.trim();
+  return trimmed ? trimmed.toLowerCase() : "__unknown_company__";
+}
+
+export function companyLabel(name: string | null | undefined): string {
+  return name?.trim() || "Unknown company";
 }
 
 /** Confidence → semantic tier used for coloring. */
